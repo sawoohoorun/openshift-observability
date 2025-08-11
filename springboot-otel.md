@@ -1118,21 +1118,18 @@ GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO appuser;
 **File**: `postgresql-deployment.yaml`
 ```yaml
 ---
-# PostgreSQL PersistentVolumeClaim
+# PostgreSQL PVC
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgresql-pvc
   namespace: tracing-db
-  labels:
-    app: postgresql
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 20Gi
-  storageClassName: gp3-csi
 
 ---
 # PostgreSQL Secret
@@ -1143,45 +1140,36 @@ metadata:
   namespace: tracing-db
 type: Opaque
 data:
-  username: YXBwdXNlcg==  # base64: appuser
-  password: c2VjdXJlUGFzczEyMw==  # base64: securePass123
-  postgres-password: YWRtaW5QYXNzMTIz  # base64: adminPass123
+  postgres-password: YWRtaW5QYXNzMTIz  # adminPass123
+  password: c2VjdXJlUGFzczEyMw==  # securePass123
 
 ---
-# PostgreSQL ConfigMap with initialization script
+# Database initialization ConfigMap
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: postgresql-init-script
+  name: postgresql-init-db
   namespace: tracing-db
 data:
-  init-db.sql: |
-    -- Create the database if it doesn't exist
-    SELECT 'CREATE DATABASE employeedb'
-    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'employeedb')\gexec
+  01-init.sql: |
+    -- Create application user
+    CREATE USER appuser WITH PASSWORD 'securePass123';
     
-    -- Connect to the database
-    \c employeedb;
-    
-    -- Create user if not exists
-    DO
-    $do$
-    BEGIN
-       IF NOT EXISTS (
-          SELECT FROM pg_catalog.pg_roles
-          WHERE  rolname = 'appuser') THEN
-          
-          CREATE USER appuser WITH PASSWORD 'securePass123';
-       END IF;
-    END
-    $do$;
+    -- Create database
+    CREATE DATABASE employeedb OWNER appuser;
     
     -- Grant permissions
     GRANT ALL PRIVILEGES ON DATABASE employeedb TO appuser;
+    
+  02-schema.sql: |
+    -- Connect to the employee database
+    \c employeedb;
+    
+    -- Grant schema permissions
     GRANT ALL ON SCHEMA public TO appuser;
     
     -- Create departments table
-    CREATE TABLE IF NOT EXISTS departments (
+    CREATE TABLE departments (
         id BIGSERIAL PRIMARY KEY,
         name VARCHAR(100) NOT NULL UNIQUE,
         description VARCHAR(500),
@@ -1190,7 +1178,7 @@ data:
     );
     
     -- Create employees table
-    CREATE TABLE IF NOT EXISTS employees (
+    CREATE TABLE employees (
         id BIGSERIAL PRIMARY KEY,
         first_name VARCHAR(50) NOT NULL,
         last_name VARCHAR(50) NOT NULL,
@@ -1203,10 +1191,10 @@ data:
     );
     
     -- Create indexes
-    CREATE INDEX IF NOT EXISTS idx_employee_email ON employees(email);
-    CREATE INDEX IF NOT EXISTS idx_employee_department ON employees(department_id);
-    CREATE INDEX IF NOT EXISTS idx_employee_status ON employees(status);
-    CREATE INDEX IF NOT EXISTS idx_employee_name ON employees(first_name, last_name);
+    CREATE INDEX idx_employee_email ON employees(email);
+    CREATE INDEX idx_employee_department ON employees(department_id);
+    CREATE INDEX idx_employee_status ON employees(status);
+    CREATE INDEX idx_employee_name ON employees(first_name, last_name);
     
     -- Create update trigger function
     CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -1218,54 +1206,46 @@ data:
     $$ language 'plpgsql';
     
     -- Create triggers
-    DO $$
-    BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_departments_updated_at') THEN
-            CREATE TRIGGER update_departments_updated_at 
-                BEFORE UPDATE ON departments 
-                FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-        END IF;
-        
-        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_employees_updated_at') THEN
-            CREATE TRIGGER update_employees_updated_at 
-                BEFORE UPDATE ON employees 
-                FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-        END IF;
-    END $$;
+    CREATE TRIGGER update_departments_updated_at 
+        BEFORE UPDATE ON departments 
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
     
-    -- Insert sample data (only if tables are empty)
-    INSERT INTO departments (name, description) 
-    SELECT * FROM (VALUES
-        ('Engineering', 'Software development and engineering team'),
-        ('Sales', 'Sales and business development team'),
-        ('Human Resources', 'HR and talent management team'),
-        ('Marketing', 'Marketing and communications team'),
-        ('Finance', 'Financial operations and accounting team'),
-        ('Operations', 'Operations and infrastructure team')
-    ) AS v(name, description)
-    WHERE NOT EXISTS (SELECT 1 FROM departments WHERE departments.name = v.name);
+    CREATE TRIGGER update_employees_updated_at 
+        BEFORE UPDATE ON employees 
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
     
-    INSERT INTO employees (first_name, last_name, email, salary, department_id, status)
-    SELECT * FROM (VALUES
-        ('John', 'Doe', 'john.doe@company.com', 85000.00, 1, 'ACTIVE'),
-        ('Jane', 'Smith', 'jane.smith@company.com', 92000.00, 1, 'ACTIVE'),
-        ('Bob', 'Johnson', 'bob.johnson@company.com', 78000.00, 2, 'ACTIVE'),
-        ('Alice', 'Williams', 'alice.williams@company.com', 95000.00, 3, 'ACTIVE'),
-        ('Charlie', 'Brown', 'charlie.brown@company.com', 72000.00, 4, 'ACTIVE'),
-        ('Diana', 'Davis', 'diana.davis@company.com', 88000.00, 5, 'ACTIVE'),
-        ('Eve', 'Miller', 'eve.miller@company.com', 91000.00, 1, 'ON_LEAVE'),
-        ('Frank', 'Wilson', 'frank.wilson@company.com', 76000.00, 2, 'ACTIVE'),
-        ('Grace', 'Taylor', 'grace.taylor@company.com', 89000.00, 6, 'ACTIVE'),
-        ('Henry', 'Anderson', 'henry.anderson@company.com', 83000.00, 1, 'ACTIVE')
-    ) AS v(first_name, last_name, email, salary, department_id, status)
-    WHERE NOT EXISTS (SELECT 1 FROM employees WHERE employees.email = v.email);
-    
-    -- Grant final permissions
+    -- Grant table permissions to appuser
     GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO appuser;
     GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO appuser;
+    
+  03-data.sql: |
+    -- Connect to the employee database
+    \c employeedb;
+    
+    -- Insert sample departments
+    INSERT INTO departments (name, description) VALUES
+    ('Engineering', 'Software development and engineering team'),
+    ('Sales', 'Sales and business development team'),
+    ('Human Resources', 'HR and talent management team'),
+    ('Marketing', 'Marketing and communications team'),
+    ('Finance', 'Financial operations and accounting team'),
+    ('Operations', 'Operations and infrastructure team');
+    
+    -- Insert sample employees
+    INSERT INTO employees (first_name, last_name, email, salary, department_id, status) VALUES
+    ('John', 'Doe', 'john.doe@company.com', 85000.00, 1, 'ACTIVE'),
+    ('Jane', 'Smith', 'jane.smith@company.com', 92000.00, 1, 'ACTIVE'),
+    ('Bob', 'Johnson', 'bob.johnson@company.com', 78000.00, 2, 'ACTIVE'),
+    ('Alice', 'Williams', 'alice.williams@company.com', 95000.00, 3, 'ACTIVE'),
+    ('Charlie', 'Brown', 'charlie.brown@company.com', 72000.00, 4, 'ACTIVE'),
+    ('Diana', 'Davis', 'diana.davis@company.com', 88000.00, 5, 'ACTIVE'),
+    ('Eve', 'Miller', 'eve.miller@company.com', 91000.00, 1, 'ON_LEAVE'),
+    ('Frank', 'Wilson', 'frank.wilson@company.com', 76000.00, 2, 'ACTIVE'),
+    ('Grace', 'Taylor', 'grace.taylor@company.com', 89000.00, 6, 'ACTIVE'),
+    ('Henry', 'Anderson', 'henry.anderson@company.com', 83000.00, 1, 'ACTIVE');
 
 ---
-# PostgreSQL Deployment
+# PostgreSQL Deployment (Bitnami)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -1287,38 +1267,47 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 999
-        fsGroup: 999
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: postgresql
-        image: registry.redhat.io/rhel8/postgresql-13:latest
+        image: docker.io/bitnami/postgresql:13
         imagePullPolicy: IfNotPresent
-        ports:
-        - containerPort: 5432
-          name: postgresql
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          runAsGroup: 1001
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
         env:
-        - name: POSTGRESQL_USER
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
               name: postgresql-secret
-              key: username
+              key: postgres-password
+        - name: POSTGRES_DB
+          value: "postgres"
+        - name: POSTGRESQL_USERNAME
+          value: "appuser"
         - name: POSTGRESQL_PASSWORD
           valueFrom:
             secretKeyRef:
               name: postgresql-secret
               key: password
-        - name: POSTGRESQL_ADMIN_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: postgresql-secret
-              key: postgres-password
         - name: POSTGRESQL_DATABASE
-          value: employeedb
-        - name: POSTGRESQL_MAX_CONNECTIONS
-          value: "100"
-        - name: POSTGRESQL_SHARED_BUFFERS
-          value: "128MB"
+          value: "employeedb"
+        ports:
+        - containerPort: 5432
+          name: postgresql
         resources:
           limits:
             memory: "2Gi"
@@ -1329,37 +1318,35 @@ spec:
         livenessProbe:
           exec:
             command:
-              - /usr/libexec/check-container
-              - --live
+            - /bin/sh
+            - -c
+            - exec pg_isready -U postgres -h 127.0.0.1 -p 5432
           initialDelaySeconds: 120
           periodSeconds: 10
-          timeoutSeconds: 10
+          timeoutSeconds: 5
           failureThreshold: 6
         readinessProbe:
           exec:
             command:
-              - /usr/libexec/check-container
+            - /bin/sh
+            - -c
+            - exec pg_isready -U postgres -h 127.0.0.1 -p 5432
           initialDelaySeconds: 5
-          periodSeconds: 10
-          timeoutSeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
           failureThreshold: 3
         volumeMounts:
         - name: postgresql-data
-          mountPath: /var/lib/pgsql/data
-        - name: postgresql-init
-          mountPath: /opt/app-root/src/postgresql-start/
-        - name: dshm
-          mountPath: /dev/shm
+          mountPath: /bitnami/postgresql
+        - name: postgresql-init-db
+          mountPath: /docker-entrypoint-initdb.d
       volumes:
       - name: postgresql-data
         persistentVolumeClaim:
           claimName: postgresql-pvc
-      - name: postgresql-init
+      - name: postgresql-init-db
         configMap:
-          name: postgresql-init-script
-      - name: dshm
-        emptyDir:
-          medium: Memory
+          name: postgresql-init-db
 
 ---
 # PostgreSQL Service
@@ -1368,8 +1355,6 @@ kind: Service
 metadata:
   name: postgresql-service
   namespace: tracing-db
-  labels:
-    app: postgresql
 spec:
   type: ClusterIP
   ports:
