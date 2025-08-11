@@ -977,6 +977,24 @@ public class EmployeeController {
     public ResponseEntity<Page<EmployeeResponseDto>> searchEmployees(
             @RequestParam String query,
             Pageable pageable) {
+    public ResponseEntity<Page<EmployeeResponseDto>> searchEmployees(
+            @RequestParam String query,
+            Pageable pageable) {
+        Span span = Span.current();
+        span.setAttribute("http.method", "GET");
+        span.setAttribute("http.route", "/api/v1/employees/search");
+        span.setAttribute("search.query", query);
+        
+        return ResponseEntity.ok(employeeService.searchEmployees(query, pageable));
+    }
+    
+    @GetMapping("/health")
+    public ResponseEntity<String> health() {
+        return ResponseEntity.ok("Employee Management Service is running!");
+    }
+}
+
+```
 ### 2.10 Dockerfile
 
 **File**: `Dockerfile` (in project root)
