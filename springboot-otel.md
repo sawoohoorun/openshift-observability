@@ -1,4 +1,3 @@
-[updated_spring_boot_guide.md](https://github.com/user-attachments/files/21723010/updated_spring_boot_guide.md)
 # Complete Spring Boot 3-tier Application with OpenTelemetry Guide - From Development to Production
 
 This comprehensive guide covers everything from creating a Spring Boot application using Spring Initializr to deploying it on OpenShift with PostgreSQL database and OpenTelemetry distributed tracing.
