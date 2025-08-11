@@ -6,7 +6,7 @@ This comprehensive guide covers everything from creating a Spring Boot applicati
 1. [Project Creation from Spring Initializr](#1-project-creation-from-spring-initializr)
 2. [Application Code Implementation](#2-application-code-implementation)
 3. [PostgreSQL Database Setup](#3-postgresql-database-setup)
-4. [Podman Image Build and Registry Push](#4-podman-image-build-and-registry-push)
+4. [Docker Image Build and Registry Push](#4-docker-image-build-and-registry-push)
 5. [OpenTelemetry Tenant Configuration](#5-opentelemetry-tenant-configuration)
 6. [Application Deployment to OpenShift](#6-application-deployment-to-openshift)
 7. [Testing and Verification](#7-testing-and-verification)
@@ -48,7 +48,7 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
 
 ## 2. Application Code Implementation
 
-### 2.1 Maven Configuration (Fixed)
+### 2.1 Maven Configuration
 **File**: `pom.xml`
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -74,10 +74,20 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
     
     <properties>
         <java.version>17</java.version>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
-        <lombok.version>1.18.30</lombok.version>
+        <opentelemetry-instrumentation.version>1.32.0-alpha</opentelemetry-instrumentation.version>
     </properties>
+    
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.opentelemetry.instrumentation</groupId>
+                <artifactId>opentelemetry-instrumentation-bom</artifactId>
+                <version>${opentelemetry-instrumentation.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
     
     <dependencies>
         <!-- Spring Boot Starters -->
@@ -85,46 +95,37 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
-        
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
-        
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
-        
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
         
-        <!-- Database -->
+        <!-- PostgreSQL Driver -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
         
-        <!-- Lombok - CRITICAL: This was missing and causing compilation errors -->
+        <!-- OpenTelemetry -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-spring-boot-starter</artifactId>
+        </dependency>
+        
+        <!-- Additional utilities -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
-            <version>${lombok.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        
-        <!-- OpenTelemetry - Spring Boot 3.x Native Support -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-tracing-bridge-otel</artifactId>
-        </dependency>
-        
-        <dependency>
-            <groupId>io.opentelemetry</groupId>
-            <artifactId>opentelemetry-exporter-otlp</artifactId>
+            <optional>true</optional>
         </dependency>
         
         <!-- Test Dependencies -->
@@ -133,13 +134,12 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
-        
-        <!-- H2 for testing (optional) -->
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-            <scope>test</scope>
-        </dependency>
+      <dependency>
+          <groupId>org.projectlombok</groupId>
+          <artifactId>lombok</artifactId>
+          <version>1.18.30</version>
+          <scope>provided</scope>
+      </dependency>
     </dependencies>
     
     <build>
@@ -157,24 +157,6 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
                             <artifactId>lombok</artifactId>
                         </exclude>
                     </excludes>
-                </configuration>
-            </plugin>
-            
-            <!-- Maven Compiler Plugin with Lombok Annotation Processing -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.11.0</version>
-                <configuration>
-                    <source>17</source>
-                    <target>17</target>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                            <version>${lombok.version}</version>
-                        </path>
-                    </annotationProcessorPaths>
                 </configuration>
             </plugin>
         </plugins>
@@ -208,7 +190,40 @@ spring:
         format_sql: true
     show-sql: false
 
-# OpenTelemetry Configuration (Spring Boot 3.2.0 native)
+# OpenTelemetry Configuration
+otel:
+  sdk:
+    disabled: false
+  service:
+    name: ${spring.application.name}
+  resource:
+    attributes:
+      service.namespace: employee-management
+      service.version: 1.0.0
+      deployment.environment: ${ENVIRONMENT:development}
+      tenant: ${TENANT_NAME:tracing-db}
+  exporter:
+    otlp:
+      endpoint: ${OTEL_ENDPOINT:http://localhost:4318}
+      protocol: http/protobuf
+      timeout: 10s
+      headers:
+        X-Scope-OrgID: ${TENANT_NAME:tracing-db}
+  traces:
+    sampler: parentbased_traceidratio
+    sampler:
+      arg: ${SAMPLING_RATE:1.0}
+  instrumentation:
+    jdbc:
+      enabled: true
+      statement-sanitizer:
+        enabled: false
+    spring-webmvc:
+      enabled: true
+    logback-appender:
+      enabled: true
+
+# Actuator Configuration
 management:
   endpoints:
     web:
@@ -224,48 +239,19 @@ management:
       enabled: true
     readinessstate:
       enabled: true
-  # OpenTelemetry Tracing Configuration
   tracing:
     enabled: true
     sampling:
       probability: ${SAMPLING_RATE:1.0}
-  otlp:
-    tracing:
-      endpoint: ${OTEL_ENDPOINT:http://localhost:4318/v1/traces}
-      headers:
-        X-Scope-OrgID: ${TENANT_NAME:tracing-db}
-  zipkin:
-    tracing:
-      endpoint: ${ZIPKIN_ENDPOINT:}
 
 # Logging with trace correlation
 logging:
   pattern:
-    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"
-    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %highlight(%-5level) [%X{traceId:-},%X{spanId:-}] %logger{36} - %msg%n"
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%X{traceId},%X{spanId}] %logger{36} - %msg%n"
   level:
     io.opentelemetry: INFO
-    org.springframework.web: INFO
+    org.springframework.web: DEBUG
     com.example.employeemanagement: DEBUG
-    org.hibernate.SQL: DEBUG
-    org.hibernate.orm.jdbc.bind: TRACE
-
-# Server configuration
-server:
-  port: 8080
-  servlet:
-    context-path: /
-  tomcat:
-    connection-timeout: 20000
-    max-connections: 8192
-    threads:
-      max: 200
-      min-spare: 10
-
-# Custom application properties
-app:
-  tenant: ${TENANT_NAME:tracing-db}
-  environment: ${ENVIRONMENT:development}
 ```
 
 ### 2.3 Entity Classes
@@ -459,10 +445,11 @@ public interface DepartmentRepository extends JpaRepository<Department, Long> {
 package com.example.employeemanagement.dto;
 
 import jakarta.validation.constraints.*;
+import lombok.Data;
 import java.math.BigDecimal;
 
+@Data
 public class CreateEmployeeDto {
-    
     @NotBlank(message = "First name is required")
     @Size(min = 2, max = 50)
     private String firstName;
@@ -480,33 +467,6 @@ public class CreateEmployeeDto {
     private BigDecimal salary;
     
     private Long departmentId;
-    
-    // Constructors
-    public CreateEmployeeDto() {}
-    
-    public CreateEmployeeDto(String firstName, String lastName, String email, BigDecimal salary, Long departmentId) {
-        this.firstName = firstName;
-        this.lastName = lastName;
-        this.email = email;
-        this.salary = salary;
-        this.departmentId = departmentId;
-    }
-    
-    // Getters and Setters
-    public String getFirstName() { return firstName; }
-    public void setFirstName(String firstName) { this.firstName = firstName; }
-    
-    public String getLastName() { return lastName; }
-    public void setLastName(String lastName) { this.lastName = lastName; }
-    
-    public String getEmail() { return email; }
-    public void setEmail(String email) { this.email = email; }
-    
-    public BigDecimal getSalary() { return salary; }
-    public void setSalary(BigDecimal salary) { this.salary = salary; }
-    
-    public Long getDepartmentId() { return departmentId; }
-    public void setDepartmentId(Long departmentId) { this.departmentId = departmentId; }
 }
 ```
 
@@ -516,10 +476,11 @@ package com.example.employeemanagement.dto;
 
 import com.example.employeemanagement.entity.EmployeeStatus;
 import jakarta.validation.constraints.*;
+import lombok.Data;
 import java.math.BigDecimal;
 
+@Data
 public class UpdateEmployeeDto {
-    
     @Size(min = 2, max = 50)
     private String firstName;
     
@@ -534,28 +495,6 @@ public class UpdateEmployeeDto {
     
     private Long departmentId;
     private EmployeeStatus status;
-    
-    // Constructors
-    public UpdateEmployeeDto() {}
-    
-    // Getters and Setters
-    public String getFirstName() { return firstName; }
-    public void setFirstName(String firstName) { this.firstName = firstName; }
-    
-    public String getLastName() { return lastName; }
-    public void setLastName(String lastName) { this.lastName = lastName; }
-    
-    public String getEmail() { return email; }
-    public void setEmail(String email) { this.email = email; }
-    
-    public BigDecimal getSalary() { return salary; }
-    public void setSalary(BigDecimal salary) { this.salary = salary; }
-    
-    public Long getDepartmentId() { return departmentId; }
-    public void setDepartmentId(Long departmentId) { this.departmentId = departmentId; }
-    
-    public EmployeeStatus getStatus() { return status; }
-    public void setStatus(EmployeeStatus status) { this.status = status; }
 }
 ```
 
@@ -564,11 +503,12 @@ public class UpdateEmployeeDto {
 package com.example.employeemanagement.dto;
 
 import com.example.employeemanagement.entity.EmployeeStatus;
+import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+@Data
 public class EmployeeResponseDto {
-    
     private Long id;
     private String firstName;
     private String lastName;
@@ -578,41 +518,10 @@ public class EmployeeResponseDto {
     private EmployeeStatus status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
-    
-    // Constructors
-    public EmployeeResponseDto() {}
-    
-    // Getters and Setters
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
-    
-    public String getFirstName() { return firstName; }
-    public void setFirstName(String firstName) { this.firstName = firstName; }
-    
-    public String getLastName() { return lastName; }
-    public void setLastName(String lastName) { this.lastName = lastName; }
-    
-    public String getEmail() { return email; }
-    public void setEmail(String email) { this.email = email; }
-    
-    public BigDecimal getSalary() { return salary; }
-    public void setSalary(BigDecimal salary) { this.salary = salary; }
-    
-    public String getDepartmentName() { return departmentName; }
-    public void setDepartmentName(String departmentName) { this.departmentName = departmentName; }
-    
-    public EmployeeStatus getStatus() { return status; }
-    public void setStatus(EmployeeStatus status) { this.status = status; }
-    
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
-    
-    public LocalDateTime getUpdatedAt() { return updatedAt; }
-    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }
 ```
 
-### 2.6 Exception Classes
+### 2.6 Exception Handling
 
 **File**: `src/main/java/com/example/employeemanagement/exception/ResourceNotFoundException.java`
 ```java
@@ -621,10 +530,6 @@ package com.example.employeemanagement.exception;
 public class ResourceNotFoundException extends RuntimeException {
     public ResourceNotFoundException(String message) {
         super(message);
-    }
-    
-    public ResourceNotFoundException(String message, Throwable cause) {
-        super(message, cause);
     }
 }
 ```
@@ -636,10 +541,6 @@ package com.example.employeemanagement.exception;
 public class DuplicateResourceException extends RuntimeException {
     public DuplicateResourceException(String message) {
         super(message);
-    }
-    
-    public DuplicateResourceException(String message, Throwable cause) {
-        super(message, cause);
     }
 }
 ```
@@ -694,17 +595,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errors);
     }
     
-    @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleGenericException(Exception ex) {
-        ErrorResponse error = new ErrorResponse(
-            HttpStatus.INTERNAL_SERVER_ERROR.value(),
-            "An unexpected error occurred",
-            LocalDateTime.now()
-        );
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
-    }
-    
-    // Error Response class
     public static class ErrorResponse {
         private int status;
         private String message;
@@ -720,11 +610,6 @@ public class GlobalExceptionHandler {
         public int getStatus() { return status; }
         public String getMessage() { return message; }
         public LocalDateTime getTimestamp() { return timestamp; }
-        
-        // Setters
-        public void setStatus(int status) { this.status = status; }
-        public void setMessage(String message) { this.message = message; }
-        public void setTimestamp(LocalDateTime timestamp) { this.timestamp = timestamp; }
     }
 }
 ```
@@ -823,6 +708,8 @@ import com.example.employeemanagement.exception.ResourceNotFoundException;
 import com.example.employeemanagement.mapper.EmployeeMapper;
 import com.example.employeemanagement.repository.DepartmentRepository;
 import com.example.employeemanagement.repository.EmployeeRepository;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
@@ -849,7 +736,12 @@ public class EmployeeServiceImpl implements EmployeeService {
     }
     
     @Override
+    @WithSpan("create-employee")
     public EmployeeResponseDto createEmployee(CreateEmployeeDto createDto) {
+        Span span = Span.current();
+        span.setAttribute("employee.email", createDto.getEmail());
+        span.setAttribute("operation.type", "create");
+        
         log.info("Creating new employee with email: {}", createDto.getEmail());
         
         // Check if email already exists - this will generate a SELECT query
@@ -864,17 +756,24 @@ public class EmployeeServiceImpl implements EmployeeService {
             Department department = departmentRepository.findById(createDto.getDepartmentId())
                 .orElseThrow(() -> new ResourceNotFoundException("Department not found"));
             employee.setDepartment(department);
+            span.setAttribute("department.id", createDto.getDepartmentId());
         }
         
         // This will generate an INSERT query
         Employee savedEmployee = employeeRepository.save(employee);
+        span.setAttribute("employee.id", savedEmployee.getId());
         
         log.info("Successfully created employee with ID: {}", savedEmployee.getId());
         return employeeMapper.toResponseDto(savedEmployee);
     }
     
     @Override
+    @WithSpan("update-employee")
     public EmployeeResponseDto updateEmployee(Long id, UpdateEmployeeDto updateDto) {
+        Span span = Span.current();
+        span.setAttribute("employee.id", id);
+        span.setAttribute("operation.type", "update");
+        
         // This will generate a SELECT query
         Employee employee = employeeRepository.findById(id)
             .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
@@ -896,7 +795,9 @@ public class EmployeeServiceImpl implements EmployeeService {
     
     @Override
     @Transactional(readOnly = true)
+    @WithSpan("get-employee")
     public EmployeeResponseDto getEmployeeById(Long id) {
+        Span.current().setAttribute("employee.id", id);
         // This will generate a SELECT query with JOIN
         Employee employee = employeeRepository.findById(id)
             .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
@@ -905,14 +806,26 @@ public class EmployeeServiceImpl implements EmployeeService {
     
     @Override
     @Transactional(readOnly = true)
+    @WithSpan("get-all-employees")
     public Page<EmployeeResponseDto> getAllEmployees(Pageable pageable) {
+        Span span = Span.current();
+        span.setAttribute("page.number", pageable.getPageNumber());
+        span.setAttribute("page.size", pageable.getPageSize());
+        
         // This will generate a paginated SELECT query
         Page<Employee> employeePage = employeeRepository.findAll(pageable);
+        span.setAttribute("total.elements", employeePage.getTotalElements());
+        
         return employeePage.map(employeeMapper::toResponseDto);
     }
     
     @Override
+    @WithSpan("delete-employee")
     public void deleteEmployee(Long id) {
+        Span span = Span.current();
+        span.setAttribute("employee.id", id);
+        span.setAttribute("operation.type", "delete");
+        
         // SELECT query to check existence
         Employee employee = employeeRepository.findById(id)
             .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
@@ -924,9 +837,16 @@ public class EmployeeServiceImpl implements EmployeeService {
     
     @Override
     @Transactional(readOnly = true)
+    @WithSpan("search-employees")
     public Page<EmployeeResponseDto> searchEmployees(String query, Pageable pageable) {
+        Span span = Span.current();
+        span.setAttribute("search.query", query);
+        span.setAttribute("operation.type", "search");
+        
         // This will generate a complex SELECT with LIKE queries
         Page<Employee> employeePage = employeeRepository.searchByName(query, pageable);
+        span.setAttribute("search.results.count", employeePage.getTotalElements());
+        
         return employeePage.map(employeeMapper::toResponseDto);
     }
 }
@@ -940,6 +860,7 @@ package com.example.employeemanagement.controller;
 
 import com.example.employeemanagement.dto.*;
 import com.example.employeemanagement.service.EmployeeService;
+import io.opentelemetry.api.trace.Span;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -963,6 +884,11 @@ public class EmployeeController {
     
     @PostMapping
     public ResponseEntity<EmployeeResponseDto> createEmployee(@Valid @RequestBody CreateEmployeeDto createDto) {
+        Span span = Span.current();
+        span.setAttribute("http.method", "POST");
+        span.setAttribute("http.route", "/api/v1/employees");
+        span.setAttribute("http.request.body.email", createDto.getEmail());
+        
         log.info("Received request to create employee: {}", createDto.getEmail());
         EmployeeResponseDto response = employeeService.createEmployee(createDto);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
@@ -970,11 +896,22 @@ public class EmployeeController {
     
     @GetMapping("/{id}")
     public ResponseEntity<EmployeeResponseDto> getEmployee(@PathVariable Long id) {
+        Span span = Span.current();
+        span.setAttribute("http.method", "GET");
+        span.setAttribute("http.route", "/api/v1/employees/{id}");
+        span.setAttribute("employee.id", id);
+        
         return ResponseEntity.ok(employeeService.getEmployeeById(id));
     }
     
     @GetMapping
     public ResponseEntity<Page<EmployeeResponseDto>> getAllEmployees(Pageable pageable) {
+        Span span = Span.current();
+        span.setAttribute("http.method", "GET");
+        span.setAttribute("http.route", "/api/v1/employees");
+        span.setAttribute("page.number", pageable.getPageNumber());
+        span.setAttribute("page.size", pageable.getPageSize());
+        
         return ResponseEntity.ok(employeeService.getAllEmployees(pageable));
     }
     
@@ -982,11 +919,21 @@ public class EmployeeController {
     public ResponseEntity<EmployeeResponseDto> updateEmployee(
             @PathVariable Long id,
             @Valid @RequestBody UpdateEmployeeDto updateDto) {
+        Span span = Span.current();
+        span.setAttribute("http.method", "PUT");
+        span.setAttribute("http.route", "/api/v1/employees/{id}");
+        span.setAttribute("employee.id", id);
+        
         return ResponseEntity.ok(employeeService.updateEmployee(id, updateDto));
     }
     
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteEmployee(@PathVariable Long id) {
+        Span span = Span.current();
+        span.setAttribute("http.method", "DELETE");
+        span.setAttribute("http.route", "/api/v1/employees/{id}");
+        span.setAttribute("employee.id", id);
+        
         employeeService.deleteEmployee(id);
         return ResponseEntity.noContent().build();
     }
@@ -995,6 +942,11 @@ public class EmployeeController {
     public ResponseEntity<Page<EmployeeResponseDto>> searchEmployees(
             @RequestParam String query,
             Pageable pageable) {
+        Span span = Span.current();
+        span.setAttribute("http.method", "GET");
+        span.setAttribute("http.route", "/api/v1/employees/search");
+        span.setAttribute("search.query", query);
+        
         return ResponseEntity.ok(employeeService.searchEmployees(query, pageable));
     }
     
@@ -1005,7 +957,7 @@ public class EmployeeController {
 }
 ```
 
-### 2.10 Dockerfile (Updated for Podman)
+### 2.10 Dockerfile
 
 **File**: `Dockerfile` (in project root)
 ```dockerfile
@@ -1072,25 +1024,6 @@ EXPOSE 8080
 ENTRYPOINT ["sh", "-c", "java ${JAVA_OPTS} -javaagent:/opt/opentelemetry-javaagent.jar -jar application.jar"]
 ```
 
-### 2.11 Build and Test Commands
-
-```bash
-# Clean and compile to verify no compilation errors
-./mvnw clean compile
-
-# Run tests
-./mvnw test
-
-# Package the application
-./mvnw clean package -DskipTests
-
-# Build Podman image
-podman build -t employee-management:1.0.0 .
-
-# Run locally for testing (optional)
-./mvnw spring-boot:run
-```
-
 ---
 
 ## 3. PostgreSQL Database Setup
@@ -1142,7 +1075,7 @@ CREATE INDEX IF NOT EXISTS idx_employee_department ON employees(department_id);
 CREATE INDEX IF NOT EXISTS idx_employee_status ON employees(status);
 CREATE INDEX IF NOT EXISTS idx_employee_name ON employees(first_name, last_name);
 
--- Create update trigger function
+-- Create update trigger for updated_at columns
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -1151,7 +1084,6 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Create triggers
 CREATE TRIGGER IF NOT EXISTS update_departments_updated_at 
     BEFORE UPDATE ON departments 
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -1371,6 +1303,374 @@ spec:
         image: registry.redhat.io/rhel8/postgresql-13:latest
         imagePullPolicy: IfNotPresent
         ports:
+        - containerPort: 5432
+          name: postgresql
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 26
+          runAsGroup: 26
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: POSTGRESQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: username
+        - name: POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: password
+        - name: POSTGRESQL_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: POSTGRESQL_DATABASE
+          value: employeedb
+        - name: POSTGRESQL_MAX_CONNECTIONS
+          value: "100"
+        - name: POSTGRESQL_SHARED_BUFFERS
+          value: "128MB"
+        - name: PGUSER
+          value: postgres
+        - name: POSTGRES_DB
+          value: employeedb
+        resources:
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+              - /usr/libexec/check-container
+              - --live
+          initialDelaySeconds: 120
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 6
+        readinessProbe:
+          exec:
+            command:
+              - /usr/libexec/check-container
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 3
+        volumeMounts:
+        - name: postgresql-data
+          mountPath: /var/lib/pgsql/data
+        - name: postgresql-init
+          mountPath: /opt/app-root/src/postgresql-start/
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: postgresql-data
+        persistentVolumeClaim:
+          claimName: postgresql-pvc
+      - name: postgresql-init
+        configMap:
+          name: postgresql-init-script
+      - name: dshm
+        emptyDir:
+          medium: Memory
+
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-service
+  namespace: tracing-db
+  labels:
+    app: postgresql
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgresql
+  selector:
+    app: postgresql
+```
+
+---
+
+## 4. Docker Image Build and Registry Push
+
+### 4.1 Build Application
+
+```bash
+# Navigate to project directory
+cd employee-management
+
+# Build the Spring Boot application
+./mvnw clean package -DskipTests
+
+# Verify the JAR was created
+ls -la target/employee-management-*.jar
+```
+
+### 4.2 Build Docker Image
+
+```bash
+# Build the Docker image
+docker build -t employee-management:1.0.0 .
+
+# Tag for your registry (replace with your registry URL)
+docker tag employee-management:1.0.0 your-registry.com/employee-management:1.0.0
+docker tag employee-management:1.0.0 your-registry.com/employee-management:latest
+
+# Verify images
+docker images | grep employee-management
+```
+
+### 4.3 Push to Container Registry
+
+```bash
+# Login to your container registry
+docker login your-registry.com
+
+# Push the images
+docker push your-registry.com/employee-management:1.0.0
+docker push your-registry.com/employee-management:latest
+
+# For OpenShift internal registry (alternative)
+# First, expose the registry route if not already done
+oc patch configs.imageregistry.operator.openshift.io/cluster --patch '{"spec":{"defaultRoute":true}}' --type=merge
+
+# Get the registry route
+REGISTRY_ROUTE=$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}')
+
+# Login to OpenShift registry
+docker login -u $(oc whoami) -p $(oc whoami -t) $REGISTRY_ROUTE
+
+# Tag and push to OpenShift registry
+docker tag employee-management:1.0.0 $REGISTRY_ROUTE/tracing-db/employee-management:1.0.0
+docker push $REGISTRY_ROUTE/tracing-db/employee-management:1.0.0
+```
+
+---
+
+## 5. OpenTelemetry Tenant Configuration
+
+### 5.1 Create New Tenant in TempoStack
+
+**File**: `tempostack-update.yaml`
+```yaml
+apiVersion: tempo.grafana.com/v1alpha1
+kind: TempoStack
+metadata:
+  name: tracing-tempo
+  namespace: tracing-system
+spec:
+  storage:
+    secret:
+      name: tempo-storage-secret
+      type: s3
+    tls:
+      enabled: true
+      caName: minio-ca-bundle
+  storageSize: 10Gi
+  template:
+    queryFrontend:
+      jaegerQuery:
+        enabled: true
+    gateway:
+      enabled: true
+  tenants:
+    mode: openshift
+    authentication:
+      - tenantName: tracing-demo
+        tenantId: tracing-demo
+      - tenantName: dev
+        tenantId: dev
+      - tenantName: prod
+        tenantId: prod
+      - tenantName: tracing-db
+        tenantId: tracing-db
+```
+
+### 5.2 Deploy OpenTelemetry Collector for tracing-db Tenant
+
+**File**: `otel-collector-tracing-db.yaml`
+```yaml
+---
+# Create ServiceAccount for the collector
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector-sa
+  namespace: tracing-db
+
+---
+# Create ClusterRole for trace writing to tracing-db tenant
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tempostack-traces-writer-tracing-db
+rules:
+- apiGroups:
+  - 'tempo.grafana.com'
+  resources:
+  - tracing-db  # Must match tenant name in TempoStack
+  resourceNames:
+  - traces
+  verbs:
+  - 'create'
+
+---
+# Bind the role to ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tempostack-traces-writer-tracing-db
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tempostack-traces-writer-tracing-db
+subjects:
+- kind: ServiceAccount
+  name: otel-collector-sa
+  namespace: tracing-db
+
+---
+# OpenTelemetry Collector Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: tracing-db
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+            cors:
+              allowed_origins:
+                - "*"
+      jaeger:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:14250
+          thrift_binary:
+            endpoint: 0.0.0.0:6832
+          thrift_compact:
+            endpoint: 0.0.0.0:6831
+          thrift_http:
+            endpoint: 0.0.0.0:14268
+      zipkin:
+        endpoint: 0.0.0.0:9411
+    
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 25
+      resource:
+        attributes:
+        - key: service.namespace
+          value: tracing-db
+          action: upsert
+        - key: deployment.environment
+          value: production
+          action: upsert
+        - key: tenant
+          value: tracing-db
+          action: upsert
+    
+    exporters:
+      otlp/tempo:
+        endpoint: tempo-tracing-tempo-gateway.tracing-system.svc.cluster.local:8090
+        tls:
+          insecure: false
+          ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+        auth:
+          authenticator: bearertokenauth
+        headers:
+          X-Scope-OrgID: "tracing-db"
+      
+      debug:
+        verbosity: detailed
+        sampling_initial: 5
+        sampling_thereafter: 200
+    
+    extensions:
+      bearertokenauth:
+        filename: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      
+      health_check:
+        endpoint: 0.0.0.0:13133
+    
+    service:
+      extensions: [bearertokenauth, health_check]
+      pipelines:
+        traces:
+          receivers: [otlp, jaeger, zipkin]
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlp/tempo, debug]
+
+---
+# OpenTelemetry Collector Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: tracing-db
+  labels:
+    app: otel-collector
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      serviceAccountName: otel-collector-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:0.91.0
+        imagePullPolicy: IfNotPresent
+        command:
+          - "/otelcol-contrib"
+          - "--config=/etc/otelcol-contrib/otel-collector-config.yaml"
+        ports:
+        - containerPort: 4317
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 4318
+          name: otlp-http
+          protocol: TCP
+        - containerPort: 14250
+          name: jaeger-grpc
+          protocol: TCP
+        - containerPort: 14268
+          name: jaeger-http
+          protocol: TCP
+        - containerPort: 9411
+          name: zipkin
+          protocol: TCP
         - containerPort: 13133
           name: health
           protocol: TCP
@@ -1785,7 +2085,7 @@ spec:
       - type: Pods
         value: 4
         periodSeconds: 15
-```
+      ```
 
 ### 6.5 Deploy the Spring Boot Application
 
@@ -2094,469 +2394,24 @@ for i in {1..1000}; do
 done
 ```
 
-### 7.9 Podman-specific Testing and Troubleshooting
-
-```bash
-# Test image locally with Podman before deployment
-podman run --rm -p 8080:8080 \
-  -e DB_HOST=your-db-host \
-  -e DB_USERNAME=appuser \
-  -e DB_PASSWORD=securePass123 \
-  -e OTEL_ENDPOINT=http://your-otel-collector:4318 \
-  employee-management:1.0.0
-
-# Check if image was built correctly
-podman inspect employee-management:1.0.0
-
-# Verify image layers
-podman history employee-management:1.0.0
-
-# Test image security
-podman run --rm employee-management:1.0.0 whoami
-
-# Export image for debugging
-podman save employee-management:1.0.0 -o debug-image.tar
-tar -tf debug-image.tar | head -20
-
-# Check image size
-podman images employee-management:1.0.0 --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
-```
-
 ---
 
 ## Summary
 
 This complete guide covers:
 
-1. **Project Creation**: Step-by-step Spring Boot 3-tier application creation from Spring Initializr with **fixed Lombok dependencies**
-2. **Application Development**: Complete implementation with proper layered architecture and Lombok support
+1. **Project Creation**: Step-by-step Spring Boot 3-tier application creation from Spring Initializr
+2. **Application Development**: Complete implementation with proper layered architecture
 3. **Database Setup**: PostgreSQL deployment with persistent storage and sample data
-4. **Container Images**: **Podman build and registry push** procedures (updated from Docker)
+4. **Container Images**: Docker build and registry push procedures
 5. **OpenTelemetry Configuration**: Multi-tenant setup with dedicated collector for `tracing-db` tenant
 6. **OpenShift Deployment**: Complete deployment manifests with health checks and scaling
 7. **Testing and Verification**: Comprehensive testing procedures including JDBC tracing verification
 
-### Key Updates Made:
-
-1. **Fixed pom.xml**: Added missing Lombok dependency with proper annotation processing configuration
-2. **Podman Integration**: Replaced all Docker commands with Podman equivalents
-3. **Enhanced Build Process**: Added Podman-specific commands for testing, debugging, and troubleshooting
-4. **Complete Implementation**: Fixed compilation issues that were preventing the application from building
-
 The application demonstrates:
 - **Presentation Layer**: REST controllers with OpenTelemetry HTTP instrumentation
-- **Business Layer**: Service classes with custom tracing spans and Lombok annotations
+- **Business Layer**: Service classes with custom tracing spans
 - **Data Layer**: JPA repositories with automatic JDBC tracing
 - **Cross-cutting Concerns**: Exception handling, validation, logging with trace correlation
 
-All JDBC operations (SELECT, INSERT, UPDATE, DELETE) are automatically traced and visible in the distributed tracing UI with detailed SQL statement information and database performance metrics. The use of Podman provides a more secure and rootless container build process compared to Docker. containerPort: 5432
-          name: postgresql
-        securityContext:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 26
-          runAsGroup: 26
-          capabilities:
-            drop:
-            - ALL
-          seccompProfile:
-            type: RuntimeDefault
-        env:
-        - name: POSTGRESQL_USER
-          valueFrom:
-            secretKeyRef:
-              name: postgresql-secret
-              key: username
-        - name: POSTGRESQL_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: postgresql-secret
-              key: password
-        - name: POSTGRESQL_ADMIN_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: postgresql-secret
-              key: postgres-password
-        - name: POSTGRESQL_DATABASE
-          value: employeedb
-        - name: POSTGRESQL_MAX_CONNECTIONS
-          value: "100"
-        - name: POSTGRESQL_SHARED_BUFFERS
-          value: "128MB"
-        - name: PGUSER
-          value: postgres
-        - name: POSTGRES_DB
-          value: employeedb
-        resources:
-          limits:
-            memory: "2Gi"
-            cpu: "1000m"
-          requests:
-            memory: "1Gi"
-            cpu: "500m"
-        livenessProbe:
-          exec:
-            command:
-              - /usr/libexec/check-container
-              - --live
-          initialDelaySeconds: 120
-          periodSeconds: 10
-          timeoutSeconds: 10
-          failureThreshold: 6
-        readinessProbe:
-          exec:
-            command:
-              - /usr/libexec/check-container
-          initialDelaySeconds: 5
-          periodSeconds: 10
-          timeoutSeconds: 10
-          failureThreshold: 3
-        volumeMounts:
-        - name: postgresql-data
-          mountPath: /var/lib/pgsql/data
-        - name: postgresql-init
-          mountPath: /opt/app-root/src/postgresql-start/
-        - name: dshm
-          mountPath: /dev/shm
-      volumes:
-      - name: postgresql-data
-        persistentVolumeClaim:
-          claimName: postgresql-pvc
-      - name: postgresql-init
-        configMap:
-          name: postgresql-init-script
-      - name: dshm
-        emptyDir:
-          medium: Memory
-
----
-# PostgreSQL Service
-apiVersion: v1
-kind: Service
-metadata:
-  name: postgresql-service
-  namespace: tracing-db
-  labels:
-    app: postgresql
-spec:
-  type: ClusterIP
-  ports:
-  - port: 5432
-    targetPort: 5432
-    name: postgresql
-  selector:
-    app: postgresql
-```
-
----
-
-## 4. Podman Image Build and Registry Push
-
-### 4.1 Build Application
-
-```bash
-# Navigate to project directory
-cd employee-management
-
-# Build the Spring Boot application
-./mvnw clean package -DskipTests
-
-# Verify the JAR was created
-ls -la target/employee-management-*.jar
-```
-
-### 4.2 Build Podman Image
-
-```bash
-# Build the Podman image
-podman build -t employee-management:1.0.0 .
-
-# Tag for your registry (replace with your registry URL)
-podman tag employee-management:1.0.0 your-registry.com/employee-management:1.0.0
-podman tag employee-management:1.0.0 your-registry.com/employee-management:latest
-
-# Verify images
-podman images | grep employee-management
-```
-
-### 4.3 Push to Container Registry
-
-```bash
-# Login to your container registry
-podman login your-registry.com
-
-# Push the images
-podman push your-registry.com/employee-management:1.0.0
-podman push your-registry.com/employee-management:latest
-
-# For OpenShift internal registry (alternative)
-# First, expose the registry route if not already done
-oc patch configs.imageregistry.operator.openshift.io/cluster --patch '{"spec":{"defaultRoute":true}}' --type=merge
-
-# Get the registry route
-REGISTRY_ROUTE=$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}')
-
-# Login to OpenShift registry with Podman
-podman login -u $(oc whoami) -p $(oc whoami -t) $REGISTRY_ROUTE
-
-# Tag and push to OpenShift registry
-podman tag employee-management:1.0.0 $REGISTRY_ROUTE/tracing-db/employee-management:1.0.0
-podman push $REGISTRY_ROUTE/tracing-db/employee-management:1.0.0
-```
-
-### 4.4 Additional Podman Commands
-
-```bash
-# List all images
-podman images
-
-# Remove untagged images (clean up)
-podman image prune
-
-# Remove specific image
-podman rmi employee-management:1.0.0
-
-# Run container locally for testing
-podman run -d --name employee-test \
-  -p 8080:8080 \
-  -e DB_HOST=localhost \
-  -e DB_PORT=5432 \
-  -e DB_NAME=employeedb \
-  -e DB_USERNAME=appuser \
-  -e DB_PASSWORD=securePass123 \
-  employee-management:1.0.0
-
-# Check container logs
-podman logs employee-test
-
-# Stop and remove test container
-podman stop employee-test
-podman rm employee-test
-
-# Save image to file (for offline transfer)
-podman save -o employee-management-1.0.0.tar employee-management:1.0.0
-
-# Load image from file
-podman load -i employee-management-1.0.0.tar
-
-# Export container filesystem
-podman export employee-test > employee-test.tar
-
-# Import container filesystem
-podman import employee-test.tar new-image:latest
-```
-
----
-
-## 5. OpenTelemetry Tenant Configuration
-
-### 5.1 Create New Tenant in TempoStack
-
-**File**: `tempostack-update.yaml`
-```yaml
-apiVersion: tempo.grafana.com/v1alpha1
-kind: TempoStack
-metadata:
-  name: tracing-tempo
-  namespace: tracing-system
-spec:
-  storage:
-    secret:
-      name: tempo-storage-secret
-      type: s3
-    tls:
-      enabled: true
-      caName: minio-ca-bundle
-  storageSize: 10Gi
-  template:
-    queryFrontend:
-      jaegerQuery:
-        enabled: true
-    gateway:
-      enabled: true
-  tenants:
-    mode: openshift
-    authentication:
-      - tenantName: tracing-demo
-        tenantId: tracing-demo
-      - tenantName: dev
-        tenantId: dev
-      - tenantName: prod
-        tenantId: prod
-      - tenantName: tracing-db
-        tenantId: tracing-db
-```
-
-### 5.2 Deploy OpenTelemetry Collector for tracing-db Tenant
-
-**File**: `otel-collector-tracing-db.yaml`
-```yaml
----
-# Create ServiceAccount for the collector
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: otel-collector-sa
-  namespace: tracing-db
-
----
-# Create ClusterRole for trace writing to tracing-db tenant
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: tempostack-traces-writer-tracing-db
-rules:
-- apiGroups:
-  - 'tempo.grafana.com'
-  resources:
-  - tracing-db  # Must match tenant name in TempoStack
-  resourceNames:
-  - traces
-  verbs:
-  - 'create'
-
----
-# Bind the role to ServiceAccount
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: tempostack-traces-writer-tracing-db
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: tempostack-traces-writer-tracing-db
-subjects:
-- kind: ServiceAccount
-  name: otel-collector-sa
-  namespace: tracing-db
-
----
-# OpenTelemetry Collector Configuration
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: otel-collector-config
-  namespace: tracing-db
-data:
-  otel-collector-config.yaml: |
-    receivers:
-      otlp:
-        protocols:
-          grpc:
-            endpoint: 0.0.0.0:4317
-          http:
-            endpoint: 0.0.0.0:4318
-            cors:
-              allowed_origins:
-                - "*"
-      jaeger:
-        protocols:
-          grpc:
-            endpoint: 0.0.0.0:14250
-          thrift_binary:
-            endpoint: 0.0.0.0:6832
-          thrift_compact:
-            endpoint: 0.0.0.0:6831
-          thrift_http:
-            endpoint: 0.0.0.0:14268
-      zipkin:
-        endpoint: 0.0.0.0:9411
-    
-    processors:
-      batch:
-        timeout: 10s
-        send_batch_size: 1024
-      memory_limiter:
-        check_interval: 1s
-        limit_percentage: 75
-        spike_limit_percentage: 25
-      resource:
-        attributes:
-        - key: service.namespace
-          value: tracing-db
-          action: upsert
-        - key: deployment.environment
-          value: production
-          action: upsert
-        - key: tenant
-          value: tracing-db
-          action: upsert
-    
-    exporters:
-      otlp/tempo:
-        endpoint: tempo-tracing-tempo-gateway.tracing-system.svc.cluster.local:8090
-        tls:
-          insecure: false
-          ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
-        auth:
-          authenticator: bearertokenauth
-        headers:
-          X-Scope-OrgID: "tracing-db"
-      
-      debug:
-        verbosity: detailed
-        sampling_initial: 5
-        sampling_thereafter: 200
-    
-    extensions:
-      bearertokenauth:
-        filename: "/var/run/secrets/kubernetes.io/serviceaccount/token"
-      
-      health_check:
-        endpoint: 0.0.0.0:13133
-    
-    service:
-      extensions: [bearertokenauth, health_check]
-      pipelines:
-        traces:
-          receivers: [otlp, jaeger, zipkin]
-          processors: [memory_limiter, resource, batch]
-          exporters: [otlp/tempo, debug]
-
----
-# OpenTelemetry Collector Deployment
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: otel-collector
-  namespace: tracing-db
-  labels:
-    app: otel-collector
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: otel-collector
-  template:
-    metadata:
-      labels:
-        app: otel-collector
-    spec:
-      serviceAccountName: otel-collector-sa
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65534
-      containers:
-      - name: otel-collector
-        image: otel/opentelemetry-collector-contrib:0.91.0
-        imagePullPolicy: IfNotPresent
-        command:
-          - "/otelcol-contrib"
-          - "--config=/etc/otelcol-contrib/otel-collector-config.yaml"
-        ports:
-        - containerPort: 4317
-          name: otlp-grpc
-          protocol: TCP
-        - containerPort: 4318
-          name: otlp-http
-          protocol: TCP
-        - containerPort: 14250
-          name: jaeger-grpc
-          protocol: TCP
-        - containerPort: 14268
-          name: jaeger-http
-          protocol: TCP
-        - containerPort: 9411
-          name: zipkin
-          protocol: TCP
-        -
+All JDBC operations (SELECT, INSERT, UPDATE, DELETE) are automatically traced and visible in the distributed tracing UI with detailed SQL statement information and database performance metrics.
