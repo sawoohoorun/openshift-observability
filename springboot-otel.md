@@ -118,20 +118,6 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
             <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
         
-        <!-- Additional OpenTelemetry instrumentation -->
-        <dependency>
-            <groupId>io.opentelemetry.instrumentation</groupId>
-            <artifactId>opentelemetry-instrumentation-annotations</artifactId>
-            <version>1.32.0</version>
-        </dependency>
-        
-        <!-- Lombok for reducing boilerplate -->
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-        
         <!-- Test Dependencies -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -156,12 +142,6 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
                     <layers>
                         <enabled>true</enabled>
                     </layers>
-                    <excludes>
-                        <exclude>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                        </exclude>
-                    </excludes>
                 </configuration>
             </plugin>
             
@@ -174,13 +154,6 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
                     <source>17</source>
                     <target>17</target>
                 </configuration>
-            </plugin>
-            
-            <!-- Maven Surefire Plugin for testing -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.2.2</version>
             </plugin>
         </plugins>
     </build>
@@ -213,40 +186,7 @@ spring:
         format_sql: true
     show-sql: false
 
-# OpenTelemetry Configuration
-otel:
-  sdk:
-    disabled: false
-  service:
-    name: ${spring.application.name}
-  resource:
-    attributes:
-      service.namespace: employee-management
-      service.version: 1.0.0
-      deployment.environment: ${ENVIRONMENT:development}
-      tenant: ${TENANT_NAME:tracing-db}
-  exporter:
-    otlp:
-      endpoint: ${OTEL_ENDPOINT:http://localhost:4318}
-      protocol: http/protobuf
-      timeout: 10s
-      headers:
-        X-Scope-OrgID: ${TENANT_NAME:tracing-db}
-  traces:
-    sampler: parentbased_traceidratio
-    sampler:
-      arg: ${SAMPLING_RATE:1.0}
-  instrumentation:
-    jdbc:
-      enabled: true
-      statement-sanitizer:
-        enabled: false
-    spring-webmvc:
-      enabled: true
-    logback-appender:
-      enabled: true
-
-# Actuator Configuration
+# OpenTelemetry Configuration (Spring Boot 3.2.0 native)
 management:
   endpoints:
     web:
@@ -262,19 +202,48 @@ management:
       enabled: true
     readinessstate:
       enabled: true
+  # OpenTelemetry Tracing Configuration
   tracing:
     enabled: true
     sampling:
       probability: ${SAMPLING_RATE:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_ENDPOINT:http://localhost:4318/v1/traces}
+      headers:
+        X-Scope-OrgID: ${TENANT_NAME:tracing-db}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:}
 
 # Logging with trace correlation
 logging:
   pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%X{traceId},%X{spanId}] %logger{36} - %msg%n"
+    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %highlight(%-5level) [%X{traceId:-},%X{spanId:-}] %logger{36} - %msg%n"
   level:
     io.opentelemetry: INFO
-    org.springframework.web: DEBUG
+    org.springframework.web: INFO
     com.example.employeemanagement: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.jdbc.bind: TRACE
+
+# Server configuration
+server:
+  port: 8080
+  servlet:
+    context-path: /
+  tomcat:
+    connection-timeout: 20000
+    max-connections: 8192
+    threads:
+      max: 200
+      min-spare: 10
+
+# Custom application properties
+app:
+  tenant: ${TENANT_NAME:tracing-db}
+  environment: ${ENVIRONMENT:development}
 ```
 
 ### 2.3 Entity Classes
@@ -468,11 +437,10 @@ public interface DepartmentRepository extends JpaRepository<Department, Long> {
 package com.example.employeemanagement.dto;
 
 import jakarta.validation.constraints.*;
-import lombok.Data;
 import java.math.BigDecimal;
 
-@Data
 public class CreateEmployeeDto {
+    
     @NotBlank(message = "First name is required")
     @Size(min = 2, max = 50)
     private String firstName;
@@ -490,6 +458,33 @@ public class CreateEmployeeDto {
     private BigDecimal salary;
     
     private Long departmentId;
+    
+    // Constructors
+    public CreateEmployeeDto() {}
+    
+    public CreateEmployeeDto(String firstName, String lastName, String email, BigDecimal salary, Long departmentId) {
+        this.firstName = firstName;
+        this.lastName = lastName;
+        this.email = email;
+        this.salary = salary;
+        this.departmentId = departmentId;
+    }
+    
+    // Getters and Setters
+    public String getFirstName() { return firstName; }
+    public void setFirstName(String firstName) { this.firstName = firstName; }
+    
+    public String getLastName() { return lastName; }
+    public void setLastName(String lastName) { this.lastName = lastName; }
+    
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    
+    public BigDecimal getSalary() { return salary; }
+    public void setSalary(BigDecimal salary) { this.salary = salary; }
+    
+    public Long getDepartmentId() { return departmentId; }
+    public void setDepartmentId(Long departmentId) { this.departmentId = departmentId; }
 }
 ```
 
@@ -499,11 +494,10 @@ package com.example.employeemanagement.dto;
 
 import com.example.employeemanagement.entity.EmployeeStatus;
 import jakarta.validation.constraints.*;
-import lombok.Data;
 import java.math.BigDecimal;
 
-@Data
 public class UpdateEmployeeDto {
+    
     @Size(min = 2, max = 50)
     private String firstName;
     
@@ -518,6 +512,28 @@ public class UpdateEmployeeDto {
     
     private Long departmentId;
     private EmployeeStatus status;
+    
+    // Constructors
+    public UpdateEmployeeDto() {}
+    
+    // Getters and Setters
+    public String getFirstName() { return firstName; }
+    public void setFirstName(String firstName) { this.firstName = firstName; }
+    
+    public String getLastName() { return lastName; }
+    public void setLastName(String lastName) { this.lastName = lastName; }
+    
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    
+    public BigDecimal getSalary() { return salary; }
+    public void setSalary(BigDecimal salary) { this.salary = salary; }
+    
+    public Long getDepartmentId() { return departmentId; }
+    public void setDepartmentId(Long departmentId) { this.departmentId = departmentId; }
+    
+    public EmployeeStatus getStatus() { return status; }
+    public void setStatus(EmployeeStatus status) { this.status = status; }
 }
 ```
 
@@ -526,12 +542,11 @@ public class UpdateEmployeeDto {
 package com.example.employeemanagement.dto;
 
 import com.example.employeemanagement.entity.EmployeeStatus;
-import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
-@Data
 public class EmployeeResponseDto {
+    
     private Long id;
     private String firstName;
     private String lastName;
@@ -541,10 +556,41 @@ public class EmployeeResponseDto {
     private EmployeeStatus status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    
+    // Constructors
+    public EmployeeResponseDto() {}
+    
+    // Getters and Setters
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+    
+    public String getFirstName() { return firstName; }
+    public void setFirstName(String firstName) { this.firstName = firstName; }
+    
+    public String getLastName() { return lastName; }
+    public void setLastName(String lastName) { this.lastName = lastName; }
+    
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    
+    public BigDecimal getSalary() { return salary; }
+    public void setSalary(BigDecimal salary) { this.salary = salary; }
+    
+    public String getDepartmentName() { return departmentName; }
+    public void setDepartmentName(String departmentName) { this.departmentName = departmentName; }
+    
+    public EmployeeStatus getStatus() { return status; }
+    public void setStatus(EmployeeStatus status) { this.status = status; }
+    
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }
 ```
 
-### 2.6 Exception Handling
+### 2.6 Exception Classes
 
 **File**: `src/main/java/com/example/employeemanagement/exception/ResourceNotFoundException.java`
 ```java
@@ -553,6 +599,10 @@ package com.example.employeemanagement.exception;
 public class ResourceNotFoundException extends RuntimeException {
     public ResourceNotFoundException(String message) {
         super(message);
+    }
+    
+    public ResourceNotFoundException(String message, Throwable cause) {
+        super(message, cause);
     }
 }
 ```
@@ -564,6 +614,10 @@ package com.example.employeemanagement.exception;
 public class DuplicateResourceException extends RuntimeException {
     public DuplicateResourceException(String message) {
         super(message);
+    }
+    
+    public DuplicateResourceException(String message, Throwable cause) {
+        super(message, cause);
     }
 }
 ```
@@ -618,6 +672,17 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errors);
     }
     
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleGenericException(Exception ex) {
+        ErrorResponse error = new ErrorResponse(
+            HttpStatus.INTERNAL_SERVER_ERROR.value(),
+            "An unexpected error occurred",
+            LocalDateTime.now()
+        );
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+    
+    // Error Response class
     public static class ErrorResponse {
         private int status;
         private String message;
@@ -633,6 +698,11 @@ public class GlobalExceptionHandler {
         public int getStatus() { return status; }
         public String getMessage() { return message; }
         public LocalDateTime getTimestamp() { return timestamp; }
+        
+        // Setters
+        public void setStatus(int status) { this.status = status; }
+        public void setMessage(String message) { this.message = message; }
+        public void setTimestamp(LocalDateTime timestamp) { this.timestamp = timestamp; }
     }
 }
 ```
@@ -731,9 +801,8 @@ import com.example.employeemanagement.exception.ResourceNotFoundException;
 import com.example.employeemanagement.mapper.EmployeeMapper;
 import com.example.employeemanagement.repository.DepartmentRepository;
 import com.example.employeemanagement.repository.EmployeeRepository;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.instrumentation.annotations.WithSpan;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -742,8 +811,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @Transactional
-@Slf4j
 public class EmployeeServiceImpl implements EmployeeService {
+    
+    private static final Logger log = LoggerFactory.getLogger(EmployeeServiceImpl.class);
     
     private final EmployeeRepository employeeRepository;
     private final DepartmentRepository departmentRepository;
@@ -759,12 +829,7 @@ public class EmployeeServiceImpl implements EmployeeService {
     }
     
     @Override
-    @WithSpan("create-employee")
     public EmployeeResponseDto createEmployee(CreateEmployeeDto createDto) {
-        Span span = Span.current();
-        span.setAttribute("employee.email", createDto.getEmail());
-        span.setAttribute("operation.type", "create");
-        
         log.info("Creating new employee with email: {}", createDto.getEmail());
         
         // Check if email already exists - this will generate a SELECT query
@@ -779,24 +844,17 @@ public class EmployeeServiceImpl implements EmployeeService {
             Department department = departmentRepository.findById(createDto.getDepartmentId())
                 .orElseThrow(() -> new ResourceNotFoundException("Department not found"));
             employee.setDepartment(department);
-            span.setAttribute("department.id", createDto.getDepartmentId());
         }
         
         // This will generate an INSERT query
         Employee savedEmployee = employeeRepository.save(employee);
-        span.setAttribute("employee.id", savedEmployee.getId());
         
         log.info("Successfully created employee with ID: {}", savedEmployee.getId());
         return employeeMapper.toResponseDto(savedEmployee);
     }
     
     @Override
-    @WithSpan("update-employee")
     public EmployeeResponseDto updateEmployee(Long id, UpdateEmployeeDto updateDto) {
-        Span span = Span.current();
-        span.setAttribute("employee.id", id);
-        span.setAttribute("operation.type", "update");
-        
         // This will generate a SELECT query
         Employee employee = employeeRepository.findById(id)
             .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
@@ -818,9 +876,7 @@ public class EmployeeServiceImpl implements EmployeeService {
     
     @Override
     @Transactional(readOnly = true)
-    @WithSpan("get-employee")
     public EmployeeResponseDto getEmployeeById(Long id) {
-        Span.current().setAttribute("employee.id", id);
         // This will generate a SELECT query with JOIN
         Employee employee = employeeRepository.findById(id)
             .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
@@ -829,26 +885,14 @@ public class EmployeeServiceImpl implements EmployeeService {
     
     @Override
     @Transactional(readOnly = true)
-    @WithSpan("get-all-employees")
     public Page<EmployeeResponseDto> getAllEmployees(Pageable pageable) {
-        Span span = Span.current();
-        span.setAttribute("page.number", pageable.getPageNumber());
-        span.setAttribute("page.size", pageable.getPageSize());
-        
         // This will generate a paginated SELECT query
         Page<Employee> employeePage = employeeRepository.findAll(pageable);
-        span.setAttribute("total.elements", employeePage.getTotalElements());
-        
         return employeePage.map(employeeMapper::toResponseDto);
     }
     
     @Override
-    @WithSpan("delete-employee")
     public void deleteEmployee(Long id) {
-        Span span = Span.current();
-        span.setAttribute("employee.id", id);
-        span.setAttribute("operation.type", "delete");
-        
         // SELECT query to check existence
         Employee employee = employeeRepository.findById(id)
             .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
@@ -860,16 +904,9 @@ public class EmployeeServiceImpl implements EmployeeService {
     
     @Override
     @Transactional(readOnly = true)
-    @WithSpan("search-employees")
     public Page<EmployeeResponseDto> searchEmployees(String query, Pageable pageable) {
-        Span span = Span.current();
-        span.setAttribute("search.query", query);
-        span.setAttribute("operation.type", "search");
-        
         // This will generate a complex SELECT with LIKE queries
         Page<Employee> employeePage = employeeRepository.searchByName(query, pageable);
-        span.setAttribute("search.results.count", employeePage.getTotalElements());
-        
         return employeePage.map(employeeMapper::toResponseDto);
     }
 }
@@ -883,9 +920,9 @@ package com.example.employeemanagement.controller;
 
 import com.example.employeemanagement.dto.*;
 import com.example.employeemanagement.service.EmployeeService;
-import io.opentelemetry.api.trace.Span;
 import jakarta.validation.Valid;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -895,8 +932,9 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/v1/employees")
-@Slf4j
 public class EmployeeController {
+    
+    private static final Logger log = LoggerFactory.getLogger(EmployeeController.class);
     
     private final EmployeeService employeeService;
     
@@ -907,11 +945,6 @@ public class EmployeeController {
     
     @PostMapping
     public ResponseEntity<EmployeeResponseDto> createEmployee(@Valid @RequestBody CreateEmployeeDto createDto) {
-        Span span = Span.current();
-        span.setAttribute("http.method", "POST");
-        span.setAttribute("http.route", "/api/v1/employees");
-        span.setAttribute("http.request.body.email", createDto.getEmail());
-        
         log.info("Received request to create employee: {}", createDto.getEmail());
         EmployeeResponseDto response = employeeService.createEmployee(createDto);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
@@ -919,22 +952,11 @@ public class EmployeeController {
     
     @GetMapping("/{id}")
     public ResponseEntity<EmployeeResponseDto> getEmployee(@PathVariable Long id) {
-        Span span = Span.current();
-        span.setAttribute("http.method", "GET");
-        span.setAttribute("http.route", "/api/v1/employees/{id}");
-        span.setAttribute("employee.id", id);
-        
         return ResponseEntity.ok(employeeService.getEmployeeById(id));
     }
     
     @GetMapping
     public ResponseEntity<Page<EmployeeResponseDto>> getAllEmployees(Pageable pageable) {
-        Span span = Span.current();
-        span.setAttribute("http.method", "GET");
-        span.setAttribute("http.route", "/api/v1/employees");
-        span.setAttribute("page.number", pageable.getPageNumber());
-        span.setAttribute("page.size", pageable.getPageSize());
-        
         return ResponseEntity.ok(employeeService.getAllEmployees(pageable));
     }
     
@@ -942,21 +964,11 @@ public class EmployeeController {
     public ResponseEntity<EmployeeResponseDto> updateEmployee(
             @PathVariable Long id,
             @Valid @RequestBody UpdateEmployeeDto updateDto) {
-        Span span = Span.current();
-        span.setAttribute("http.method", "PUT");
-        span.setAttribute("http.route", "/api/v1/employees/{id}");
-        span.setAttribute("employee.id", id);
-        
         return ResponseEntity.ok(employeeService.updateEmployee(id, updateDto));
     }
     
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteEmployee(@PathVariable Long id) {
-        Span span = Span.current();
-        span.setAttribute("http.method", "DELETE");
-        span.setAttribute("http.route", "/api/v1/employees/{id}");
-        span.setAttribute("employee.id", id);
-        
         employeeService.deleteEmployee(id);
         return ResponseEntity.noContent().build();
     }
@@ -965,12 +977,194 @@ public class EmployeeController {
     public ResponseEntity<Page<EmployeeResponseDto>> searchEmployees(
             @RequestParam String query,
             Pageable pageable) {
-        Span span = Span.current();
-        span.setAttribute("http.method", "GET");
-        span.setAttribute("http.route", "/api/v1/employees/search");
-        span.setAttribute("search.query", query);
-        
-        return ResponseEntity.ok(employeeService.searchEmployees(query, pageable));
+### 2.10 Dockerfile
+
+**File**: `Dockerfile` (in project root)
+```dockerfile
+# Multi-stage build for Spring Boot with OpenTelemetry
+FROM bellsoft/liberica-openjdk-debian:17-cds AS builder
+WORKDIR /builder
+
+# Download OpenTelemetry Java Agent
+RUN apt-get update && apt-get install -y curl && \
+    curl -L -o opentelemetry-javaagent.jar \
+    https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar
+
+# Copy Maven files and source
+COPY .mvn .mvn
+COPY mvnw .
+COPY pom.xml .
+COPY src src
+
+# Build the application
+RUN ./mvnw clean package -DskipTests
+
+# Extract layers for better caching
+RUN java -Djarmode=tools -jar target/*.jar extract --layers --destination extracted
+
+# Runtime stage
+FROM bellsoft/liberica-openjre-debian:17-cds
+WORKDIR /application
+
+# Create non-root user
+RUN groupadd -r spring && useradd -r -g spring spring
+
+# Copy OpenTelemetry agent
+COPY --from=builder /builder/opentelemetry-javaagent.jar /opt/opentelemetry-javaagent.jar
+
+# Copy extracted layers
+COPY --from=builder /builder/extracted/dependencies/ ./
+COPY --from=builder /builder/extracted/spring-boot-loader/ ./
+COPY --from=builder /builder/extracted/snapshot-dependencies/ ./
+COPY --from=builder /builder/extracted/application/ ./
+
+# Set ownership
+RUN chown -R spring:spring /application
+
+USER spring
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:8080/actuator/health || exit 1
+
+# JVM settings optimized for containers
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=70.0 \
+    -XX:+UseG1GC \
+    -XX:+UseContainerSupport \
+    -XX:+UseStringDeduplication \
+    -XX:+ExitOnOutOfMemoryError"
+
+# OpenTelemetry configuration
+ENV OTEL_JAVAAGENT_ENABLED=true
+ENV OTEL_INSTRUMENTATION_JDBC_STATEMENT_SANITIZER_ENABLED=false
+
+EXPOSE 8080
+
+# Run with OpenTelemetry agent
+ENTRYPOINT ["sh", "-c", "java ${JAVA_OPTS} -javaagent:/opt/opentelemetry-javaagent.jar -jar application.jar"]
+```
+
+### 2.11 Build and Test Commands
+
+```bash
+# Clean and compile to verify no compilation errors
+./mvnw clean compile
+
+# Run tests
+./mvnw test
+
+# Package the application
+./mvnw clean package -DskipTests
+
+# Build Docker image
+docker build -t employee-management:1.0.0 .
+
+# Run locally for testing (optional)
+./mvnw spring-boot:run
+```
+
+---
+
+## 3. PostgreSQL Database Setup
+
+### 3.1 Database Schema and Sample Data
+
+**File**: `database-init.sql`
+```sql
+-- Create the database
+CREATE DATABASE employeedb;
+
+-- Connect to the database
+\c employeedb;
+
+-- Create user
+CREATE USER appuser WITH PASSWORD 'securePass123';
+GRANT ALL PRIVILEGES ON DATABASE employeedb TO appuser;
+
+-- Grant schema permissions
+GRANT ALL ON SCHEMA public TO appuser;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO appuser;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO appuser;
+
+-- Create departments table
+CREATE TABLE IF NOT EXISTS departments (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    description VARCHAR(500),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create employees table
+CREATE TABLE IF NOT EXISTS employees (
+    id BIGSERIAL PRIMARY KEY,
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    salary DECIMAL(10,2) NOT NULL,
+    department_id BIGINT REFERENCES departments(id),
+    status VARCHAR(20) DEFAULT 'ACTIVE',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_employee_email ON employees(email);
+CREATE INDEX IF NOT EXISTS idx_employee_department ON employees(department_id);
+CREATE INDEX IF NOT EXISTS idx_employee_status ON employees(status);
+CREATE INDEX IF NOT EXISTS idx_employee_name ON employees(first_name, last_name);
+
+-- Create update trigger for updated_at columns
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$ language 'plpgsql';
+
+CREATE TRIGGER IF NOT EXISTS update_departments_updated_at 
+    BEFORE UPDATE ON departments 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER IF NOT EXISTS update_employees_updated_at 
+    BEFORE UPDATE ON employees 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Insert sample departments
+INSERT INTO departments (name, description) VALUES
+('Engineering', 'Software development and engineering team'),
+('Sales', 'Sales and business development team'),
+('Human Resources', 'HR and talent management team'),
+('Marketing', 'Marketing and communications team'),
+('Finance', 'Financial operations and accounting team'),
+('Operations', 'Operations and infrastructure team');
+
+-- Insert sample employees
+INSERT INTO employees (first_name, last_name, email, salary, department_id, status) VALUES
+('John', 'Doe', 'john.doe@company.com', 85000.00, 1, 'ACTIVE'),
+('Jane', 'Smith', 'jane.smith@company.com', 92000.00, 1, 'ACTIVE'),
+('Bob', 'Johnson', 'bob.johnson@company.com', 78000.00, 2, 'ACTIVE'),
+('Alice', 'Williams', 'alice.williams@company.com', 95000.00, 3, 'ACTIVE'),
+('Charlie', 'Brown', 'charlie.brown@company.com', 72000.00, 4, 'ACTIVE'),
+('Diana', 'Davis', 'diana.davis@company.com', 88000.00, 5, 'ACTIVE'),
+('Eve', 'Miller', 'eve.miller@company.com', 91000.00, 1, 'ON_LEAVE'),
+('Frank', 'Wilson', 'frank.wilson@company.com', 76000.00, 2, 'ACTIVE'),
+('Grace', 'Taylor', 'grace.taylor@company.com', 89000.00, 6, 'ACTIVE'),
+('Henry', 'Anderson', 'henry.anderson@company.com', 83000.00, 1, 'ACTIVE');
+
+-- Grant permissions on all tables to appuser
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO appuser;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO appuser;
+```eable));
+    }
+    
+    @GetMapping("/health")
+    public ResponseEntity<String> health() {
+        return ResponseEntity.ok("Employee Management Service is running!");
+    }
+}
+```eable));
     }
     
     @GetMapping("/health")
@@ -1147,18 +1341,21 @@ GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO appuser;
 **File**: `postgresql-deployment.yaml`
 ```yaml
 ---
-# PostgreSQL PVC
+# PostgreSQL PersistentVolumeClaim
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgresql-pvc
   namespace: tracing-db
+  labels:
+    app: postgresql
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 20Gi
+  storageClassName: gp3-csi
 
 ---
 # PostgreSQL Secret
@@ -1169,36 +1366,45 @@ metadata:
   namespace: tracing-db
 type: Opaque
 data:
-  postgres-password: YWRtaW5QYXNzMTIz  # adminPass123
-  password: c2VjdXJlUGFzczEyMw==  # securePass123
+  username: YXBwdXNlcg==  # base64: appuser
+  password: c2VjdXJlUGFzczEyMw==  # base64: securePass123
+  postgres-password: YWRtaW5QYXNzMTIz  # base64: adminPass123
 
 ---
-# Database initialization ConfigMap
+# PostgreSQL ConfigMap with initialization script
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: postgresql-init-db
+  name: postgresql-init-script
   namespace: tracing-db
 data:
-  01-init.sql: |
-    -- Create application user
-    CREATE USER appuser WITH PASSWORD 'securePass123';
+  init-db.sql: |
+    -- Create the database if it doesn't exist
+    SELECT 'CREATE DATABASE employeedb'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'employeedb')\gexec
     
-    -- Create database
-    CREATE DATABASE employeedb OWNER appuser;
+    -- Connect to the database
+    \c employeedb;
+    
+    -- Create user if not exists
+    DO
+    $do$
+    BEGIN
+       IF NOT EXISTS (
+          SELECT FROM pg_catalog.pg_roles
+          WHERE  rolname = 'appuser') THEN
+          
+          CREATE USER appuser WITH PASSWORD 'securePass123';
+       END IF;
+    END
+    $do$;
     
     -- Grant permissions
     GRANT ALL PRIVILEGES ON DATABASE employeedb TO appuser;
-    
-  02-schema.sql: |
-    -- Connect to the employee database
-    \c employeedb;
-    
-    -- Grant schema permissions
     GRANT ALL ON SCHEMA public TO appuser;
     
     -- Create departments table
-    CREATE TABLE departments (
+    CREATE TABLE IF NOT EXISTS departments (
         id BIGSERIAL PRIMARY KEY,
         name VARCHAR(100) NOT NULL UNIQUE,
         description VARCHAR(500),
@@ -1207,7 +1413,7 @@ data:
     );
     
     -- Create employees table
-    CREATE TABLE employees (
+    CREATE TABLE IF NOT EXISTS employees (
         id BIGSERIAL PRIMARY KEY,
         first_name VARCHAR(50) NOT NULL,
         last_name VARCHAR(50) NOT NULL,
@@ -1220,10 +1426,10 @@ data:
     );
     
     -- Create indexes
-    CREATE INDEX idx_employee_email ON employees(email);
-    CREATE INDEX idx_employee_department ON employees(department_id);
-    CREATE INDEX idx_employee_status ON employees(status);
-    CREATE INDEX idx_employee_name ON employees(first_name, last_name);
+    CREATE INDEX IF NOT EXISTS idx_employee_email ON employees(email);
+    CREATE INDEX IF NOT EXISTS idx_employee_department ON employees(department_id);
+    CREATE INDEX IF NOT EXISTS idx_employee_status ON employees(status);
+    CREATE INDEX IF NOT EXISTS idx_employee_name ON employees(first_name, last_name);
     
     -- Create update trigger function
     CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -1235,46 +1441,54 @@ data:
     $$ language 'plpgsql';
     
     -- Create triggers
-    CREATE TRIGGER update_departments_updated_at 
-        BEFORE UPDATE ON departments 
-        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_departments_updated_at') THEN
+            CREATE TRIGGER update_departments_updated_at 
+                BEFORE UPDATE ON departments 
+                FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+        END IF;
+        
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_employees_updated_at') THEN
+            CREATE TRIGGER update_employees_updated_at 
+                BEFORE UPDATE ON employees 
+                FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+        END IF;
+    END $$;
     
-    CREATE TRIGGER update_employees_updated_at 
-        BEFORE UPDATE ON employees 
-        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    -- Insert sample data (only if tables are empty)
+    INSERT INTO departments (name, description) 
+    SELECT * FROM (VALUES
+        ('Engineering', 'Software development and engineering team'),
+        ('Sales', 'Sales and business development team'),
+        ('Human Resources', 'HR and talent management team'),
+        ('Marketing', 'Marketing and communications team'),
+        ('Finance', 'Financial operations and accounting team'),
+        ('Operations', 'Operations and infrastructure team')
+    ) AS v(name, description)
+    WHERE NOT EXISTS (SELECT 1 FROM departments WHERE departments.name = v.name);
     
-    -- Grant table permissions to appuser
+    INSERT INTO employees (first_name, last_name, email, salary, department_id, status)
+    SELECT * FROM (VALUES
+        ('John', 'Doe', 'john.doe@company.com', 85000.00, 1, 'ACTIVE'),
+        ('Jane', 'Smith', 'jane.smith@company.com', 92000.00, 1, 'ACTIVE'),
+        ('Bob', 'Johnson', 'bob.johnson@company.com', 78000.00, 2, 'ACTIVE'),
+        ('Alice', 'Williams', 'alice.williams@company.com', 95000.00, 3, 'ACTIVE'),
+        ('Charlie', 'Brown', 'charlie.brown@company.com', 72000.00, 4, 'ACTIVE'),
+        ('Diana', 'Davis', 'diana.davis@company.com', 88000.00, 5, 'ACTIVE'),
+        ('Eve', 'Miller', 'eve.miller@company.com', 91000.00, 1, 'ON_LEAVE'),
+        ('Frank', 'Wilson', 'frank.wilson@company.com', 76000.00, 2, 'ACTIVE'),
+        ('Grace', 'Taylor', 'grace.taylor@company.com', 89000.00, 6, 'ACTIVE'),
+        ('Henry', 'Anderson', 'henry.anderson@company.com', 83000.00, 1, 'ACTIVE')
+    ) AS v(first_name, last_name, email, salary, department_id, status)
+    WHERE NOT EXISTS (SELECT 1 FROM employees WHERE employees.email = v.email);
+    
+    -- Grant final permissions
     GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO appuser;
     GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO appuser;
-    
-  03-data.sql: |
-    -- Connect to the employee database
-    \c employeedb;
-    
-    -- Insert sample departments
-    INSERT INTO departments (name, description) VALUES
-    ('Engineering', 'Software development and engineering team'),
-    ('Sales', 'Sales and business development team'),
-    ('Human Resources', 'HR and talent management team'),
-    ('Marketing', 'Marketing and communications team'),
-    ('Finance', 'Financial operations and accounting team'),
-    ('Operations', 'Operations and infrastructure team');
-    
-    -- Insert sample employees
-    INSERT INTO employees (first_name, last_name, email, salary, department_id, status) VALUES
-    ('John', 'Doe', 'john.doe@company.com', 85000.00, 1, 'ACTIVE'),
-    ('Jane', 'Smith', 'jane.smith@company.com', 92000.00, 1, 'ACTIVE'),
-    ('Bob', 'Johnson', 'bob.johnson@company.com', 78000.00, 2, 'ACTIVE'),
-    ('Alice', 'Williams', 'alice.williams@company.com', 95000.00, 3, 'ACTIVE'),
-    ('Charlie', 'Brown', 'charlie.brown@company.com', 72000.00, 4, 'ACTIVE'),
-    ('Diana', 'Davis', 'diana.davis@company.com', 88000.00, 5, 'ACTIVE'),
-    ('Eve', 'Miller', 'eve.miller@company.com', 91000.00, 1, 'ON_LEAVE'),
-    ('Frank', 'Wilson', 'frank.wilson@company.com', 76000.00, 2, 'ACTIVE'),
-    ('Grace', 'Taylor', 'grace.taylor@company.com', 89000.00, 6, 'ACTIVE'),
-    ('Henry', 'Anderson', 'henry.anderson@company.com', 83000.00, 1, 'ACTIVE');
 
 ---
-# PostgreSQL Deployment (Bitnami)
+# PostgreSQL Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -1296,47 +1510,54 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1001
-        runAsGroup: 1001
-        fsGroup: 1001
+        runAsUser: 26
+        runAsGroup: 26
+        fsGroup: 26
         seccompProfile:
           type: RuntimeDefault
       containers:
       - name: postgresql
-        image: docker.io/bitnami/postgresql:13
+        image: registry.redhat.io/rhel8/postgresql-13:latest
         imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5432
+          name: postgresql
         securityContext:
           allowPrivilegeEscalation: false
           runAsNonRoot: true
-          runAsUser: 1001
-          runAsGroup: 1001
+          runAsUser: 26
+          runAsGroup: 26
           capabilities:
             drop:
             - ALL
           seccompProfile:
             type: RuntimeDefault
         env:
-        - name: POSTGRES_USER
-          value: "postgres"
-        - name: POSTGRES_PASSWORD
+        - name: POSTGRESQL_USER
           valueFrom:
             secretKeyRef:
               name: postgresql-secret
-              key: postgres-password
-        - name: POSTGRES_DB
-          value: "postgres"
-        - name: POSTGRESQL_USERNAME
-          value: "appuser"
+              key: username
         - name: POSTGRESQL_PASSWORD
           valueFrom:
             secretKeyRef:
               name: postgresql-secret
               key: password
+        - name: POSTGRESQL_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
         - name: POSTGRESQL_DATABASE
-          value: "employeedb"
-        ports:
-        - containerPort: 5432
-          name: postgresql
+          value: employeedb
+        - name: POSTGRESQL_MAX_CONNECTIONS
+          value: "100"
+        - name: POSTGRESQL_SHARED_BUFFERS
+          value: "128MB"
+        - name: PGUSER
+          value: postgres
+        - name: POSTGRES_DB
+          value: employeedb
         resources:
           limits:
             memory: "2Gi"
@@ -1347,35 +1568,37 @@ spec:
         livenessProbe:
           exec:
             command:
-            - /bin/sh
-            - -c
-            - exec pg_isready -U postgres -h 127.0.0.1 -p 5432
+              - /usr/libexec/check-container
+              - --live
           initialDelaySeconds: 120
           periodSeconds: 10
-          timeoutSeconds: 5
+          timeoutSeconds: 10
           failureThreshold: 6
         readinessProbe:
           exec:
             command:
-            - /bin/sh
-            - -c
-            - exec pg_isready -U postgres -h 127.0.0.1 -p 5432
+              - /usr/libexec/check-container
           initialDelaySeconds: 5
-          periodSeconds: 5
-          timeoutSeconds: 3
+          periodSeconds: 10
+          timeoutSeconds: 10
           failureThreshold: 3
         volumeMounts:
         - name: postgresql-data
-          mountPath: /bitnami/postgresql
-        - name: postgresql-init-db
-          mountPath: /docker-entrypoint-initdb.d
+          mountPath: /var/lib/pgsql/data
+        - name: postgresql-init
+          mountPath: /opt/app-root/src/postgresql-start/
+        - name: dshm
+          mountPath: /dev/shm
       volumes:
       - name: postgresql-data
         persistentVolumeClaim:
           claimName: postgresql-pvc
-      - name: postgresql-init-db
+      - name: postgresql-init
         configMap:
-          name: postgresql-init-db
+          name: postgresql-init-script
+      - name: dshm
+        emptyDir:
+          medium: Memory
 
 ---
 # PostgreSQL Service
@@ -1384,6 +1607,8 @@ kind: Service
 metadata:
   name: postgresql-service
   namespace: tracing-db
+  labels:
+    app: postgresql
 spec:
   type: ClusterIP
   ports:
