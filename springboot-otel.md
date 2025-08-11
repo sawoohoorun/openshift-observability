@@ -1,3 +1,4 @@
+[updated_spring_boot_guide.md](https://github.com/user-attachments/files/21723010/updated_spring_boot_guide.md)
 # Complete Spring Boot 3-tier Application with OpenTelemetry Guide - From Development to Production
 
 This comprehensive guide covers everything from creating a Spring Boot application using Spring Initializr to deploying it on OpenShift with PostgreSQL database and OpenTelemetry distributed tracing.
@@ -6,7 +7,7 @@ This comprehensive guide covers everything from creating a Spring Boot applicati
 1. [Project Creation from Spring Initializr](#1-project-creation-from-spring-initializr)
 2. [Application Code Implementation](#2-application-code-implementation)
 3. [PostgreSQL Database Setup](#3-postgresql-database-setup)
-4. [Docker Image Build and Registry Push](#4-docker-image-build-and-registry-push)
+4. [Podman Image Build and Registry Push](#4-podman-image-build-and-registry-push)
 5. [OpenTelemetry Tenant Configuration](#5-opentelemetry-tenant-configuration)
 6. [Application Deployment to OpenShift](#6-application-deployment-to-openshift)
 7. [Testing and Verification](#7-testing-and-verification)
@@ -48,7 +49,7 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
 
 ## 2. Application Code Implementation
 
-### 2.1 Maven Configuration
+### 2.1 Maven Configuration (Fixed)
 **File**: `pom.xml`
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -76,6 +77,7 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
         <java.version>17</java.version>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
+        <lombok.version>1.18.30</lombok.version>
     </properties>
     
     <dependencies>
@@ -105,6 +107,14 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
+        </dependency>
+        
+        <!-- Lombok - CRITICAL: This was missing and causing compilation errors -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
+            <scope>provided</scope>
         </dependency>
         
         <!-- OpenTelemetry - Spring Boot 3.x Native Support -->
@@ -142,10 +152,16 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
                     <layers>
                         <enabled>true</enabled>
                     </layers>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
                 </configuration>
             </plugin>
             
-            <!-- Maven Compiler Plugin -->
+            <!-- Maven Compiler Plugin with Lombok Annotation Processing -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -153,6 +169,13 @@ mkdir -p src/main/java/com/example/employeemanagement/{entity,repository,service
                 <configuration>
                     <source>17</source>
                     <target>17</target>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
                 </configuration>
             </plugin>
         </plugins>
@@ -801,8 +824,7 @@ import com.example.employeemanagement.exception.ResourceNotFoundException;
 import com.example.employeemanagement.mapper.EmployeeMapper;
 import com.example.employeemanagement.repository.DepartmentRepository;
 import com.example.employeemanagement.repository.EmployeeRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -811,9 +833,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @Transactional
+@Slf4j
 public class EmployeeServiceImpl implements EmployeeService {
-    
-    private static final Logger log = LoggerFactory.getLogger(EmployeeServiceImpl.class);
     
     private final EmployeeRepository employeeRepository;
     private final DepartmentRepository departmentRepository;
@@ -921,8 +942,7 @@ package com.example.employeemanagement.controller;
 import com.example.employeemanagement.dto.*;
 import com.example.employeemanagement.service.EmployeeService;
 import jakarta.validation.Valid;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -932,9 +952,8 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/v1/employees")
+@Slf4j
 public class EmployeeController {
-    
-    private static final Logger log = LoggerFactory.getLogger(EmployeeController.class);
     
     private final EmployeeService employeeService;
     
@@ -977,14 +996,6 @@ public class EmployeeController {
     public ResponseEntity<Page<EmployeeResponseDto>> searchEmployees(
             @RequestParam String query,
             Pageable pageable) {
-    public ResponseEntity<Page<EmployeeResponseDto>> searchEmployees(
-            @RequestParam String query,
-            Pageable pageable) {
-        Span span = Span.current();
-        span.setAttribute("http.method", "GET");
-        span.setAttribute("http.route", "/api/v1/employees/search");
-        span.setAttribute("search.query", query);
-        
         return ResponseEntity.ok(employeeService.searchEmployees(query, pageable));
     }
     
@@ -993,9 +1004,9 @@ public class EmployeeController {
         return ResponseEntity.ok("Employee Management Service is running!");
     }
 }
-
 ```
-### 2.10 Dockerfile
+
+### 2.10 Dockerfile (Updated for Podman)
 
 **File**: `Dockerfile` (in project root)
 ```dockerfile
@@ -1074,8 +1085,8 @@ ENTRYPOINT ["sh", "-c", "java ${JAVA_OPTS} -javaagent:/opt/opentelemetry-javaage
 # Package the application
 ./mvnw clean package -DskipTests
 
-# Build Docker image
-docker build -t employee-management:1.0.0 .
+# Build Podman image
+podman build -t employee-management:1.0.0 .
 
 # Run locally for testing (optional)
 ./mvnw spring-boot:run
@@ -1132,185 +1143,7 @@ CREATE INDEX IF NOT EXISTS idx_employee_department ON employees(department_id);
 CREATE INDEX IF NOT EXISTS idx_employee_status ON employees(status);
 CREATE INDEX IF NOT EXISTS idx_employee_name ON employees(first_name, last_name);
 
--- Create update trigger for updated_at columns
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $
-BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
-    RETURN NEW;
-END;
-$ language 'plpgsql';
-
-CREATE TRIGGER IF NOT EXISTS update_departments_updated_at 
-    BEFORE UPDATE ON departments 
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER IF NOT EXISTS update_employees_updated_at 
-    BEFORE UPDATE ON employees 
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- Insert sample departments
-INSERT INTO departments (name, description) VALUES
-('Engineering', 'Software development and engineering team'),
-('Sales', 'Sales and business development team'),
-('Human Resources', 'HR and talent management team'),
-('Marketing', 'Marketing and communications team'),
-('Finance', 'Financial operations and accounting team'),
-('Operations', 'Operations and infrastructure team');
-
--- Insert sample employees
-INSERT INTO employees (first_name, last_name, email, salary, department_id, status) VALUES
-('John', 'Doe', 'john.doe@company.com', 85000.00, 1, 'ACTIVE'),
-('Jane', 'Smith', 'jane.smith@company.com', 92000.00, 1, 'ACTIVE'),
-('Bob', 'Johnson', 'bob.johnson@company.com', 78000.00, 2, 'ACTIVE'),
-('Alice', 'Williams', 'alice.williams@company.com', 95000.00, 3, 'ACTIVE'),
-('Charlie', 'Brown', 'charlie.brown@company.com', 72000.00, 4, 'ACTIVE'),
-('Diana', 'Davis', 'diana.davis@company.com', 88000.00, 5, 'ACTIVE'),
-('Eve', 'Miller', 'eve.miller@company.com', 91000.00, 1, 'ON_LEAVE'),
-('Frank', 'Wilson', 'frank.wilson@company.com', 76000.00, 2, 'ACTIVE'),
-('Grace', 'Taylor', 'grace.taylor@company.com', 89000.00, 6, 'ACTIVE'),
-('Henry', 'Anderson', 'henry.anderson@company.com', 83000.00, 1, 'ACTIVE');
-
--- Grant permissions on all tables to appuser
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO appuser;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO appuser;
-```eable));
-    }
-    
-    @GetMapping("/health")
-    public ResponseEntity<String> health() {
-        return ResponseEntity.ok("Employee Management Service is running!");
-    }
-}
-```eable));
-    }
-    
-    @GetMapping("/health")
-    public ResponseEntity<String> health() {
-        return ResponseEntity.ok("Employee Management Service is running!");
-    }
-}
-```
-
-### 2.10 Dockerfile
-
-**File**: `Dockerfile` (in project root)
-```dockerfile
-# Multi-stage build for Spring Boot with OpenTelemetry
-FROM bellsoft/liberica-openjdk-debian:17-cds AS builder
-WORKDIR /builder
-
-# Download OpenTelemetry Java Agent
-RUN apt-get update && apt-get install -y curl && \
-    curl -L -o opentelemetry-javaagent.jar \
-    https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar
-
-# Copy Maven files and source
-COPY .mvn .mvn
-COPY mvnw .
-COPY pom.xml .
-COPY src src
-
-# Build the application
-RUN ./mvnw clean package -DskipTests
-
-# Extract layers for better caching
-RUN java -Djarmode=tools -jar target/*.jar extract --layers --destination extracted
-
-# Runtime stage
-FROM bellsoft/liberica-openjre-debian:17-cds
-WORKDIR /application
-
-# Create non-root user
-RUN groupadd -r spring && useradd -r -g spring spring
-
-# Copy OpenTelemetry agent
-COPY --from=builder /builder/opentelemetry-javaagent.jar /opt/opentelemetry-javaagent.jar
-
-# Copy extracted layers
-COPY --from=builder /builder/extracted/dependencies/ ./
-COPY --from=builder /builder/extracted/spring-boot-loader/ ./
-COPY --from=builder /builder/extracted/snapshot-dependencies/ ./
-COPY --from=builder /builder/extracted/application/ ./
-
-# Set ownership
-RUN chown -R spring:spring /application
-
-USER spring
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:8080/actuator/health || exit 1
-
-# JVM settings optimized for containers
-ENV JAVA_OPTS="-XX:MaxRAMPercentage=70.0 \
-    -XX:+UseG1GC \
-    -XX:+UseContainerSupport \
-    -XX:+UseStringDeduplication \
-    -XX:+ExitOnOutOfMemoryError"
-
-# OpenTelemetry configuration
-ENV OTEL_JAVAAGENT_ENABLED=true
-ENV OTEL_INSTRUMENTATION_JDBC_STATEMENT_SANITIZER_ENABLED=false
-
-EXPOSE 8080
-
-# Run with OpenTelemetry agent
-ENTRYPOINT ["sh", "-c", "java ${JAVA_OPTS} -javaagent:/opt/opentelemetry-javaagent.jar -jar application.jar"]
-```
-
----
-
-## 3. PostgreSQL Database Setup
-
-### 3.1 Database Schema and Sample Data
-
-**File**: `database-init.sql`
-```sql
--- Create the database
-CREATE DATABASE employeedb;
-
--- Connect to the database
-\c employeedb;
-
--- Create user
-CREATE USER appuser WITH PASSWORD 'securePass123';
-GRANT ALL PRIVILEGES ON DATABASE employeedb TO appuser;
-
--- Grant schema permissions
-GRANT ALL ON SCHEMA public TO appuser;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO appuser;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO appuser;
-
--- Create departments table
-CREATE TABLE IF NOT EXISTS departments (
-    id BIGSERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL UNIQUE,
-    description VARCHAR(500),
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create employees table
-CREATE TABLE IF NOT EXISTS employees (
-    id BIGSERIAL PRIMARY KEY,
-    first_name VARCHAR(50) NOT NULL,
-    last_name VARCHAR(50) NOT NULL,
-    email VARCHAR(255) NOT NULL UNIQUE,
-    salary DECIMAL(10,2) NOT NULL,
-    department_id BIGINT REFERENCES departments(id),
-    status VARCHAR(20) DEFAULT 'ACTIVE',
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create indexes for better performance
-CREATE INDEX IF NOT EXISTS idx_employee_email ON employees(email);
-CREATE INDEX IF NOT EXISTS idx_employee_department ON employees(department_id);
-CREATE INDEX IF NOT EXISTS idx_employee_status ON employees(status);
-CREATE INDEX IF NOT EXISTS idx_employee_name ON employees(first_name, last_name);
-
--- Create update trigger for updated_at columns
+-- Create update trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -1319,6 +1152,7 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+-- Create triggers
 CREATE TRIGGER IF NOT EXISTS update_departments_updated_at 
     BEFORE UPDATE ON departments 
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -1538,374 +1372,6 @@ spec:
         image: registry.redhat.io/rhel8/postgresql-13:latest
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 5432
-          name: postgresql
-        securityContext:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 26
-          runAsGroup: 26
-          capabilities:
-            drop:
-            - ALL
-          seccompProfile:
-            type: RuntimeDefault
-        env:
-        - name: POSTGRESQL_USER
-          valueFrom:
-            secretKeyRef:
-              name: postgresql-secret
-              key: username
-        - name: POSTGRESQL_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: postgresql-secret
-              key: password
-        - name: POSTGRESQL_ADMIN_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: postgresql-secret
-              key: postgres-password
-        - name: POSTGRESQL_DATABASE
-          value: employeedb
-        - name: POSTGRESQL_MAX_CONNECTIONS
-          value: "100"
-        - name: POSTGRESQL_SHARED_BUFFERS
-          value: "128MB"
-        - name: PGUSER
-          value: postgres
-        - name: POSTGRES_DB
-          value: employeedb
-        resources:
-          limits:
-            memory: "2Gi"
-            cpu: "1000m"
-          requests:
-            memory: "1Gi"
-            cpu: "500m"
-        livenessProbe:
-          exec:
-            command:
-              - /usr/libexec/check-container
-              - --live
-          initialDelaySeconds: 120
-          periodSeconds: 10
-          timeoutSeconds: 10
-          failureThreshold: 6
-        readinessProbe:
-          exec:
-            command:
-              - /usr/libexec/check-container
-          initialDelaySeconds: 5
-          periodSeconds: 10
-          timeoutSeconds: 10
-          failureThreshold: 3
-        volumeMounts:
-        - name: postgresql-data
-          mountPath: /var/lib/pgsql/data
-        - name: postgresql-init
-          mountPath: /opt/app-root/src/postgresql-start/
-        - name: dshm
-          mountPath: /dev/shm
-      volumes:
-      - name: postgresql-data
-        persistentVolumeClaim:
-          claimName: postgresql-pvc
-      - name: postgresql-init
-        configMap:
-          name: postgresql-init-script
-      - name: dshm
-        emptyDir:
-          medium: Memory
-
----
-# PostgreSQL Service
-apiVersion: v1
-kind: Service
-metadata:
-  name: postgresql-service
-  namespace: tracing-db
-  labels:
-    app: postgresql
-spec:
-  type: ClusterIP
-  ports:
-  - port: 5432
-    targetPort: 5432
-    name: postgresql
-  selector:
-    app: postgresql
-```
-
----
-
-## 4. Docker Image Build and Registry Push
-
-### 4.1 Build Application
-
-```bash
-# Navigate to project directory
-cd employee-management
-
-# Build the Spring Boot application
-./mvnw clean package -DskipTests
-
-# Verify the JAR was created
-ls -la target/employee-management-*.jar
-```
-
-### 4.2 Build Docker Image
-
-```bash
-# Build the Docker image
-docker build -t employee-management:1.0.0 .
-
-# Tag for your registry (replace with your registry URL)
-docker tag employee-management:1.0.0 your-registry.com/employee-management:1.0.0
-docker tag employee-management:1.0.0 your-registry.com/employee-management:latest
-
-# Verify images
-docker images | grep employee-management
-```
-
-### 4.3 Push to Container Registry
-
-```bash
-# Login to your container registry
-docker login your-registry.com
-
-# Push the images
-docker push your-registry.com/employee-management:1.0.0
-docker push your-registry.com/employee-management:latest
-
-# For OpenShift internal registry (alternative)
-# First, expose the registry route if not already done
-oc patch configs.imageregistry.operator.openshift.io/cluster --patch '{"spec":{"defaultRoute":true}}' --type=merge
-
-# Get the registry route
-REGISTRY_ROUTE=$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}')
-
-# Login to OpenShift registry
-docker login -u $(oc whoami) -p $(oc whoami -t) $REGISTRY_ROUTE
-
-# Tag and push to OpenShift registry
-docker tag employee-management:1.0.0 $REGISTRY_ROUTE/tracing-db/employee-management:1.0.0
-docker push $REGISTRY_ROUTE/tracing-db/employee-management:1.0.0
-```
-
----
-
-## 5. OpenTelemetry Tenant Configuration
-
-### 5.1 Create New Tenant in TempoStack
-
-**File**: `tempostack-update.yaml`
-```yaml
-apiVersion: tempo.grafana.com/v1alpha1
-kind: TempoStack
-metadata:
-  name: tracing-tempo
-  namespace: tracing-system
-spec:
-  storage:
-    secret:
-      name: tempo-storage-secret
-      type: s3
-    tls:
-      enabled: true
-      caName: minio-ca-bundle
-  storageSize: 10Gi
-  template:
-    queryFrontend:
-      jaegerQuery:
-        enabled: true
-    gateway:
-      enabled: true
-  tenants:
-    mode: openshift
-    authentication:
-      - tenantName: tracing-demo
-        tenantId: tracing-demo
-      - tenantName: dev
-        tenantId: dev
-      - tenantName: prod
-        tenantId: prod
-      - tenantName: tracing-db
-        tenantId: tracing-db
-```
-
-### 5.2 Deploy OpenTelemetry Collector for tracing-db Tenant
-
-**File**: `otel-collector-tracing-db.yaml`
-```yaml
----
-# Create ServiceAccount for the collector
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: otel-collector-sa
-  namespace: tracing-db
-
----
-# Create ClusterRole for trace writing to tracing-db tenant
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: tempostack-traces-writer-tracing-db
-rules:
-- apiGroups:
-  - 'tempo.grafana.com'
-  resources:
-  - tracing-db  # Must match tenant name in TempoStack
-  resourceNames:
-  - traces
-  verbs:
-  - 'create'
-
----
-# Bind the role to ServiceAccount
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: tempostack-traces-writer-tracing-db
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: tempostack-traces-writer-tracing-db
-subjects:
-- kind: ServiceAccount
-  name: otel-collector-sa
-  namespace: tracing-db
-
----
-# OpenTelemetry Collector Configuration
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: otel-collector-config
-  namespace: tracing-db
-data:
-  otel-collector-config.yaml: |
-    receivers:
-      otlp:
-        protocols:
-          grpc:
-            endpoint: 0.0.0.0:4317
-          http:
-            endpoint: 0.0.0.0:4318
-            cors:
-              allowed_origins:
-                - "*"
-      jaeger:
-        protocols:
-          grpc:
-            endpoint: 0.0.0.0:14250
-          thrift_binary:
-            endpoint: 0.0.0.0:6832
-          thrift_compact:
-            endpoint: 0.0.0.0:6831
-          thrift_http:
-            endpoint: 0.0.0.0:14268
-      zipkin:
-        endpoint: 0.0.0.0:9411
-    
-    processors:
-      batch:
-        timeout: 10s
-        send_batch_size: 1024
-      memory_limiter:
-        check_interval: 1s
-        limit_percentage: 75
-        spike_limit_percentage: 25
-      resource:
-        attributes:
-        - key: service.namespace
-          value: tracing-db
-          action: upsert
-        - key: deployment.environment
-          value: production
-          action: upsert
-        - key: tenant
-          value: tracing-db
-          action: upsert
-    
-    exporters:
-      otlp/tempo:
-        endpoint: tempo-tracing-tempo-gateway.tracing-system.svc.cluster.local:8090
-        tls:
-          insecure: false
-          ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
-        auth:
-          authenticator: bearertokenauth
-        headers:
-          X-Scope-OrgID: "tracing-db"
-      
-      debug:
-        verbosity: detailed
-        sampling_initial: 5
-        sampling_thereafter: 200
-    
-    extensions:
-      bearertokenauth:
-        filename: "/var/run/secrets/kubernetes.io/serviceaccount/token"
-      
-      health_check:
-        endpoint: 0.0.0.0:13133
-    
-    service:
-      extensions: [bearertokenauth, health_check]
-      pipelines:
-        traces:
-          receivers: [otlp, jaeger, zipkin]
-          processors: [memory_limiter, resource, batch]
-          exporters: [otlp/tempo, debug]
-
----
-# OpenTelemetry Collector Deployment
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: otel-collector
-  namespace: tracing-db
-  labels:
-    app: otel-collector
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: otel-collector
-  template:
-    metadata:
-      labels:
-        app: otel-collector
-    spec:
-      serviceAccountName: otel-collector-sa
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65534
-      containers:
-      - name: otel-collector
-        image: otel/opentelemetry-collector-contrib:0.91.0
-        imagePullPolicy: IfNotPresent
-        command:
-          - "/otelcol-contrib"
-          - "--config=/etc/otelcol-contrib/otel-collector-config.yaml"
-        ports:
-        - containerPort: 4317
-          name: otlp-grpc
-          protocol: TCP
-        - containerPort: 4318
-          name: otlp-http
-          protocol: TCP
-        - containerPort: 14250
-          name: jaeger-grpc
-          protocol: TCP
-        - containerPort: 14268
-          name: jaeger-http
-          protocol: TCP
-        - containerPort: 9411
-          name: zipkin
-          protocol: TCP
         - containerPort: 13133
           name: health
           protocol: TCP
@@ -2320,7 +1786,7 @@ spec:
       - type: Pods
         value: 4
         periodSeconds: 15
-      ```
+```
 
 ### 6.5 Deploy the Spring Boot Application
 
@@ -2629,24 +2095,469 @@ for i in {1..1000}; do
 done
 ```
 
+### 7.9 Podman-specific Testing and Troubleshooting
+
+```bash
+# Test image locally with Podman before deployment
+podman run --rm -p 8080:8080 \
+  -e DB_HOST=your-db-host \
+  -e DB_USERNAME=appuser \
+  -e DB_PASSWORD=securePass123 \
+  -e OTEL_ENDPOINT=http://your-otel-collector:4318 \
+  employee-management:1.0.0
+
+# Check if image was built correctly
+podman inspect employee-management:1.0.0
+
+# Verify image layers
+podman history employee-management:1.0.0
+
+# Test image security
+podman run --rm employee-management:1.0.0 whoami
+
+# Export image for debugging
+podman save employee-management:1.0.0 -o debug-image.tar
+tar -tf debug-image.tar | head -20
+
+# Check image size
+podman images employee-management:1.0.0 --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
+```
+
 ---
 
 ## Summary
 
 This complete guide covers:
 
-1. **Project Creation**: Step-by-step Spring Boot 3-tier application creation from Spring Initializr
-2. **Application Development**: Complete implementation with proper layered architecture
+1. **Project Creation**: Step-by-step Spring Boot 3-tier application creation from Spring Initializr with **fixed Lombok dependencies**
+2. **Application Development**: Complete implementation with proper layered architecture and Lombok support
 3. **Database Setup**: PostgreSQL deployment with persistent storage and sample data
-4. **Container Images**: Docker build and registry push procedures
+4. **Container Images**: **Podman build and registry push** procedures (updated from Docker)
 5. **OpenTelemetry Configuration**: Multi-tenant setup with dedicated collector for `tracing-db` tenant
 6. **OpenShift Deployment**: Complete deployment manifests with health checks and scaling
 7. **Testing and Verification**: Comprehensive testing procedures including JDBC tracing verification
 
+### Key Updates Made:
+
+1. **Fixed pom.xml**: Added missing Lombok dependency with proper annotation processing configuration
+2. **Podman Integration**: Replaced all Docker commands with Podman equivalents
+3. **Enhanced Build Process**: Added Podman-specific commands for testing, debugging, and troubleshooting
+4. **Complete Implementation**: Fixed compilation issues that were preventing the application from building
+
 The application demonstrates:
 - **Presentation Layer**: REST controllers with OpenTelemetry HTTP instrumentation
-- **Business Layer**: Service classes with custom tracing spans
+- **Business Layer**: Service classes with custom tracing spans and Lombok annotations
 - **Data Layer**: JPA repositories with automatic JDBC tracing
 - **Cross-cutting Concerns**: Exception handling, validation, logging with trace correlation
 
-All JDBC operations (SELECT, INSERT, UPDATE, DELETE) are automatically traced and visible in the distributed tracing UI with detailed SQL statement information and database performance metrics.
+All JDBC operations (SELECT, INSERT, UPDATE, DELETE) are automatically traced and visible in the distributed tracing UI with detailed SQL statement information and database performance metrics. The use of Podman provides a more secure and rootless container build process compared to Docker. containerPort: 5432
+          name: postgresql
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 26
+          runAsGroup: 26
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: POSTGRESQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: username
+        - name: POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: password
+        - name: POSTGRESQL_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: POSTGRESQL_DATABASE
+          value: employeedb
+        - name: POSTGRESQL_MAX_CONNECTIONS
+          value: "100"
+        - name: POSTGRESQL_SHARED_BUFFERS
+          value: "128MB"
+        - name: PGUSER
+          value: postgres
+        - name: POSTGRES_DB
+          value: employeedb
+        resources:
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+              - /usr/libexec/check-container
+              - --live
+          initialDelaySeconds: 120
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 6
+        readinessProbe:
+          exec:
+            command:
+              - /usr/libexec/check-container
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 3
+        volumeMounts:
+        - name: postgresql-data
+          mountPath: /var/lib/pgsql/data
+        - name: postgresql-init
+          mountPath: /opt/app-root/src/postgresql-start/
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: postgresql-data
+        persistentVolumeClaim:
+          claimName: postgresql-pvc
+      - name: postgresql-init
+        configMap:
+          name: postgresql-init-script
+      - name: dshm
+        emptyDir:
+          medium: Memory
+
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-service
+  namespace: tracing-db
+  labels:
+    app: postgresql
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgresql
+  selector:
+    app: postgresql
+```
+
+---
+
+## 4. Podman Image Build and Registry Push
+
+### 4.1 Build Application
+
+```bash
+# Navigate to project directory
+cd employee-management
+
+# Build the Spring Boot application
+./mvnw clean package -DskipTests
+
+# Verify the JAR was created
+ls -la target/employee-management-*.jar
+```
+
+### 4.2 Build Podman Image
+
+```bash
+# Build the Podman image
+podman build -t employee-management:1.0.0 .
+
+# Tag for your registry (replace with your registry URL)
+podman tag employee-management:1.0.0 your-registry.com/employee-management:1.0.0
+podman tag employee-management:1.0.0 your-registry.com/employee-management:latest
+
+# Verify images
+podman images | grep employee-management
+```
+
+### 4.3 Push to Container Registry
+
+```bash
+# Login to your container registry
+podman login your-registry.com
+
+# Push the images
+podman push your-registry.com/employee-management:1.0.0
+podman push your-registry.com/employee-management:latest
+
+# For OpenShift internal registry (alternative)
+# First, expose the registry route if not already done
+oc patch configs.imageregistry.operator.openshift.io/cluster --patch '{"spec":{"defaultRoute":true}}' --type=merge
+
+# Get the registry route
+REGISTRY_ROUTE=$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}')
+
+# Login to OpenShift registry with Podman
+podman login -u $(oc whoami) -p $(oc whoami -t) $REGISTRY_ROUTE
+
+# Tag and push to OpenShift registry
+podman tag employee-management:1.0.0 $REGISTRY_ROUTE/tracing-db/employee-management:1.0.0
+podman push $REGISTRY_ROUTE/tracing-db/employee-management:1.0.0
+```
+
+### 4.4 Additional Podman Commands
+
+```bash
+# List all images
+podman images
+
+# Remove untagged images (clean up)
+podman image prune
+
+# Remove specific image
+podman rmi employee-management:1.0.0
+
+# Run container locally for testing
+podman run -d --name employee-test \
+  -p 8080:8080 \
+  -e DB_HOST=localhost \
+  -e DB_PORT=5432 \
+  -e DB_NAME=employeedb \
+  -e DB_USERNAME=appuser \
+  -e DB_PASSWORD=securePass123 \
+  employee-management:1.0.0
+
+# Check container logs
+podman logs employee-test
+
+# Stop and remove test container
+podman stop employee-test
+podman rm employee-test
+
+# Save image to file (for offline transfer)
+podman save -o employee-management-1.0.0.tar employee-management:1.0.0
+
+# Load image from file
+podman load -i employee-management-1.0.0.tar
+
+# Export container filesystem
+podman export employee-test > employee-test.tar
+
+# Import container filesystem
+podman import employee-test.tar new-image:latest
+```
+
+---
+
+## 5. OpenTelemetry Tenant Configuration
+
+### 5.1 Create New Tenant in TempoStack
+
+**File**: `tempostack-update.yaml`
+```yaml
+apiVersion: tempo.grafana.com/v1alpha1
+kind: TempoStack
+metadata:
+  name: tracing-tempo
+  namespace: tracing-system
+spec:
+  storage:
+    secret:
+      name: tempo-storage-secret
+      type: s3
+    tls:
+      enabled: true
+      caName: minio-ca-bundle
+  storageSize: 10Gi
+  template:
+    queryFrontend:
+      jaegerQuery:
+        enabled: true
+    gateway:
+      enabled: true
+  tenants:
+    mode: openshift
+    authentication:
+      - tenantName: tracing-demo
+        tenantId: tracing-demo
+      - tenantName: dev
+        tenantId: dev
+      - tenantName: prod
+        tenantId: prod
+      - tenantName: tracing-db
+        tenantId: tracing-db
+```
+
+### 5.2 Deploy OpenTelemetry Collector for tracing-db Tenant
+
+**File**: `otel-collector-tracing-db.yaml`
+```yaml
+---
+# Create ServiceAccount for the collector
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector-sa
+  namespace: tracing-db
+
+---
+# Create ClusterRole for trace writing to tracing-db tenant
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tempostack-traces-writer-tracing-db
+rules:
+- apiGroups:
+  - 'tempo.grafana.com'
+  resources:
+  - tracing-db  # Must match tenant name in TempoStack
+  resourceNames:
+  - traces
+  verbs:
+  - 'create'
+
+---
+# Bind the role to ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tempostack-traces-writer-tracing-db
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tempostack-traces-writer-tracing-db
+subjects:
+- kind: ServiceAccount
+  name: otel-collector-sa
+  namespace: tracing-db
+
+---
+# OpenTelemetry Collector Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: tracing-db
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+            cors:
+              allowed_origins:
+                - "*"
+      jaeger:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:14250
+          thrift_binary:
+            endpoint: 0.0.0.0:6832
+          thrift_compact:
+            endpoint: 0.0.0.0:6831
+          thrift_http:
+            endpoint: 0.0.0.0:14268
+      zipkin:
+        endpoint: 0.0.0.0:9411
+    
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 25
+      resource:
+        attributes:
+        - key: service.namespace
+          value: tracing-db
+          action: upsert
+        - key: deployment.environment
+          value: production
+          action: upsert
+        - key: tenant
+          value: tracing-db
+          action: upsert
+    
+    exporters:
+      otlp/tempo:
+        endpoint: tempo-tracing-tempo-gateway.tracing-system.svc.cluster.local:8090
+        tls:
+          insecure: false
+          ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+        auth:
+          authenticator: bearertokenauth
+        headers:
+          X-Scope-OrgID: "tracing-db"
+      
+      debug:
+        verbosity: detailed
+        sampling_initial: 5
+        sampling_thereafter: 200
+    
+    extensions:
+      bearertokenauth:
+        filename: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      
+      health_check:
+        endpoint: 0.0.0.0:13133
+    
+    service:
+      extensions: [bearertokenauth, health_check]
+      pipelines:
+        traces:
+          receivers: [otlp, jaeger, zipkin]
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlp/tempo, debug]
+
+---
+# OpenTelemetry Collector Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: tracing-db
+  labels:
+    app: otel-collector
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      serviceAccountName: otel-collector-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:0.91.0
+        imagePullPolicy: IfNotPresent
+        command:
+          - "/otelcol-contrib"
+          - "--config=/etc/otelcol-contrib/otel-collector-config.yaml"
+        ports:
+        - containerPort: 4317
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 4318
+          name: otlp-http
+          protocol: TCP
+        - containerPort: 14250
+          name: jaeger-grpc
+          protocol: TCP
+        - containerPort: 14268
+          name: jaeger-http
+          protocol: TCP
+        - containerPort: 9411
+          name: zipkin
+          protocol: TCP
+        -
