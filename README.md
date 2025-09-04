@@ -1472,6 +1472,22 @@ EOF
 ```
 
 2. **Install the Distributed Tracing UI Plugin**:
+
+```bash
+# Create Distribute Tracing UI Plugin
+oc apply -f - <<'EOF'
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  annotations:
+    observability.openshift.io/api-support: GeneralAvailability
+  name: distributed-tracing
+spec:
+  type: DistributedTracing
+EOF
+```
+
+
 ```bash
 # The plugin is typically installed automatically with the Red Hat build of OpenTelemetry
 # Verify it's enabled in the console
@@ -1480,6 +1496,8 @@ oc get consoles.operator.openshift.io cluster -o yaml | grep -A 5 plugins
 # If not listed, you may need to enable it
 oc patch consoles.operator.openshift.io cluster --type='json' -p='[{"op": "add", "path": "/spec/plugins/-", "value": "distributed-tracing"}]'
 ```
+
+
 
 3. **Access Traces in OpenShift Console**:
    - Log into the OpenShift Console

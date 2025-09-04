@@ -1,0 +1,8 @@
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  annotations:
+    observability.openshift.io/api-support: GeneralAvailability
+  name: distributed-tracing
+spec:
+  type: DistributedTracing
